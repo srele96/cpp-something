@@ -7,10 +7,66 @@
 
 #include "SDL3/SDL.h" // IWYU pragma: keep
 #include "glad/glad.h"
+#include "glm/ext/scalar_constants.hpp"
 #include "glm/gtc/type_ptr.hpp"
 #include "glm/mat4x4.hpp" // IWYU pragma: keep
 #include "glm/trigonometric.hpp"
 #include "glm/vec3.hpp" // IWYU pragma: keep
+
+struct Vertex {
+  glm::vec3 pos;
+  glm::vec3 color;
+};
+
+struct MeshData {
+  std::vector<Vertex> vertices;
+  std::vector<unsigned int> indices;
+};
+
+MeshData generateCube(float side) {
+  float h = side / 2.0f;
+  MeshData mesh;
+
+  struct Face {
+    glm::vec3 normal, right, up, color;
+  };
+
+  std::vector<Face> faces = {
+      {{0, 0, 1}, {1, 0, 0}, {0, 1, 0}, {1, 0, 0}},   // Front
+      {{0, 0, -1}, {-1, 0, 0}, {0, 1, 0}, {0, 1, 0}}, // Back
+      {{0, 1, 0}, {1, 0, 0}, {0, 0, -1}, {0, 0, 1}},  // Top
+      {{0, -1, 0}, {1, 0, 0}, {0, 0, 1}, {1, 1, 0}},  // Bottom
+      {{1, 0, 0}, {0, 0, -1}, {0, 1, 0}, {0, 1, 1}},  // Right
+      {{-1, 0, 0}, {0, 0, 1}, {0, 1, 0}, {1, 0, 1}}   // Left
+  };
+
+  for (int i = 0; i < faces.size(); i++) {
+    const auto &f = faces[i];
+    glm::vec3 center = f.normal * h;
+
+    // 1. Add 4 Vertices
+    mesh.vertices.push_back(
+        {center - (f.right * h) - (f.up * h), f.color}); // 0
+    mesh.vertices.push_back(
+        {center + (f.right * h) - (f.up * h), f.color}); // 1
+    mesh.vertices.push_back(
+        {center + (f.right * h) + (f.up * h), f.color}); // 2
+    mesh.vertices.push_back(
+        {center - (f.right * h) + (f.up * h), f.color}); // 3
+
+    // 2. Add 6 Indices (per face)
+    unsigned int offset = i * 4;
+    // Triangle 1 (0, 1, 2)
+    mesh.indices.push_back(offset + 0);
+    mesh.indices.push_back(offset + 1);
+    mesh.indices.push_back(offset + 2);
+    // Triangle 2 (2, 3, 0)
+    mesh.indices.push_back(offset + 2);
+    mesh.indices.push_back(offset + 3);
+    mesh.indices.push_back(offset + 0);
+  }
+  return mesh;
+}
 
 glm::mat4 lookAt(const glm::vec3 &eye, const glm::vec3 &center,
                  const glm::vec3 &worldUp) {
@@ -56,24 +112,41 @@ std::string loadShaderSource(const std::string &filePath) {
 
 const std::string vertexShaderSource = R"(
 #version 330 core
-layout (location = 0) in vec2 aPos;
+// layout (location = 0) in vec2 aPos;
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aColor;
+
+out vec3 vColor;
 
 uniform mat4 u_view;
 uniform mat4 u_projection;
+uniform mat4 u_model;
 
 void main() {
+  float pi = 3.14;
+  float angle = pi;
+
+  mat4 wtf = mat4(
+    1.0, 0.0,         0.0,        0.0,
+    0.0, cos(angle),  sin(angle), 0.0,
+    0.0, -sin(angle), cos(angle), 0.0,
+    0.0, 0.0,         0.0,        1.0
+  );
+
   mat4 model = mat4(
-    1, 0, 0, 0,
-    0, 1, 0, 0,
-    0, 0, 1, 0,
-    0, 0, -2, 1
+      1.0, 0.0, 0.0, 0.0,
+      0.0, 1.0, 0.0, 0.0,
+      0.0, 0.0, 1.0, 0.0,
+      0.0, 0.0, -10.0, 1.0
   );
 
   // TODO: Render parametric sphere, shade it, and check it out in 3D
 
   // TODO: Rotate a cube and inspect its sides
 
-  gl_Position = u_projection * u_view * model * vec4(aPos, -1, 1.0);
+  // gl_Position = u_projection * u_view * model * vec4(aPos, -1, 1.0);
+  gl_Position = u_projection * u_view * u_model * wtf * vec4(aPos, 1.0); 
+  vColor = aColor;
 }
 )";
 
@@ -81,8 +154,11 @@ const std::string fragmentShaderSource = R"(
 #version 330 core
 out vec4 FragColor;
 
+in vec3 vColor;
+
 void main() {
-  FragColor = vec4(0.2, 0.8, 0.3, 1.0);
+  // FragColor = vec4(0.2, 0.8, 0.3, 1.0);
+  FragColor = vec4(vColor, 1.0);
 }
 )";
 
@@ -199,6 +275,8 @@ int main() {
     std::cerr << "Failed to initialize GLAD\n";
   }
 
+  glEnable(GL_DEPTH_TEST);
+
   glViewport(0, 0, window_width, window_height);
 
   /* CREATE VERTICES */
@@ -232,6 +310,7 @@ int main() {
   GLint timeLocation{glGetUniformLocation(shaderProgram, "time")};
   GLint viewLocation{glGetUniformLocation(shaderProgram, "u_view")};
   GLint projectionLocation{glGetUniformLocation(shaderProgram, "u_projection")};
+  GLint modelLocation{glGetUniformLocation(shaderProgram, "u_model")};
 
   /* VAO + VBO */
 
@@ -288,6 +367,37 @@ int main() {
   glBindVertexArray(0);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 
+  struct Wtf {
+    GLuint VAO, VBO, EBO;
+  };
+
+  MeshData cubeMesh{generateCube(4.0f)};
+
+  Wtf wtf;
+
+  glGenVertexArrays(1, &wtf.VAO);
+  glGenBuffers(1, &wtf.VBO);
+  glGenBuffers(1, &wtf.EBO);
+
+  glBindVertexArray(wtf.VAO);
+
+  glBindBuffer(GL_ARRAY_BUFFER, wtf.VBO);
+  glBufferData(GL_ARRAY_BUFFER, cubeMesh.vertices.size() * sizeof(Vertex),
+               cubeMesh.vertices.data(), GL_STATIC_DRAW);
+
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, wtf.EBO);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+               cubeMesh.indices.size() * sizeof(unsigned int),
+               cubeMesh.indices.data(), GL_STATIC_DRAW);
+
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
+  glEnableVertexAttribArray(0);
+
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(3 * sizeof(float)));
+  glEnableVertexAttribArray(1);
+
+  glBindVertexArray(0);
+
   bool running = true;
   SDL_Event event;
 
@@ -303,6 +413,24 @@ int main() {
   const glm::vec3 eye{0.0f, 0.0f, 0.0f};
 
   const float sensitivity = 0.01f;
+
+  glm::mat4 translateMatrix {
+    1.0f, 0.0f,  0.0f,  0.0f,
+    0.0f, 1.0f,  0.0f,  0.0f,
+    0.0f, 0.0f,  1.0f,  0.0f,
+    0.0f, 0.0f, -10.0f, 1.0f,
+  };
+
+  const float angle = glm::pi<float>() / 6;
+
+  glm::mat4 rotateMatrix {
+    1.0f, 0.0f,  0.0f,  0.0f,
+    0.0f, glm::cos(angle),  -glm::sin(angle),  0.0f,
+    0.0f, glm::sin(angle),  glm::cos(angle),  0.0f,
+    0.0f, 0.0f, -0.0f, 1.0f,
+  };
+
+  glm::mat4 modelMatrix = translateMatrix * rotateMatrix;
 
   while (running) {
     while (SDL_PollEvent(&event)) {
@@ -348,7 +476,7 @@ int main() {
 
     /* RENDER */
     glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     const float fov{glm::radians(60.0f)};
     const float aspectRatio{window_width / window_height};
@@ -360,11 +488,15 @@ int main() {
     glUniformMatrix4fv(viewLocation, 1, GL_FALSE, glm::value_ptr(viewMatrix));
     glUniformMatrix4fv(projectionLocation, 1, GL_FALSE,
                        glm::value_ptr(projectionMatrix));
+    glUniformMatrix4fv(modelLocation, 1, GL_FALSE, glm::value_ptr(modelMatrix));
     // glUniform1f(timeLocation, _time);
-    glBindVertexArray(VAO);
+    // glBindVertexArray(VAO);
 
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    // glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     // glDrawArrays(GL_LINE_STRIP, 0, vertexCount);
+
+    glBindVertexArray(wtf.VAO);
+    glDrawElements(GL_TRIANGLES, cubeMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
     /* ISSUE RENDER DIRECTIVE */
     SDL_GL_SwapWindow(window);
