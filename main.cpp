@@ -6,6 +6,9 @@
 #include <vector>
 
 #include "SDL3/SDL.h" // IWYU pragma: keep
+#include "SDL3/SDL_keyboard.h"
+#include "SDL3/SDL_scancode.h"
+#include "SDL3/SDL_timer.h"
 #include "glad/glad.h"
 #include "glm/ext/scalar_constants.hpp"
 #include "glm/gtc/type_ptr.hpp"
@@ -31,6 +34,8 @@ MeshData generateCube(float side) {
     glm::vec3 normal, right, up, color;
   };
 
+  // TODO: Play with math here to understand ins and outs of how and why this
+  // works.
   std::vector<Face> faces = {
       {{0, 0, 1}, {1, 0, 0}, {0, 1, 0}, {1, 0, 0}},   // Front
       {{0, 0, -1}, {-1, 0, 0}, {0, 1, 0}, {0, 1, 0}}, // Back
@@ -44,26 +49,28 @@ MeshData generateCube(float side) {
     const auto &f = faces[i];
     glm::vec3 center = f.normal * h;
 
-    // 1. Add 4 Vertices
+    // Add 4 edge vertices
     mesh.vertices.push_back(
-        {center - (f.right * h) - (f.up * h), f.color}); // 0
+        {center - (f.right * h) - (f.up * h), f.color}); // BottomLeft
     mesh.vertices.push_back(
-        {center + (f.right * h) - (f.up * h), f.color}); // 1
+        {center + (f.right * h) - (f.up * h), f.color}); // TopLeft
     mesh.vertices.push_back(
-        {center + (f.right * h) + (f.up * h), f.color}); // 2
+        {center + (f.right * h) + (f.up * h), f.color}); // TopRight
     mesh.vertices.push_back(
-        {center - (f.right * h) + (f.up * h), f.color}); // 3
+        {center - (f.right * h) + (f.up * h), f.color}); // BottomRight
 
-    // 2. Add 6 Indices (per face)
+    // Add face indices
     unsigned int offset = i * 4;
-    // Triangle 1 (0, 1, 2)
+
+    // Does the order of indices matter?
     mesh.indices.push_back(offset + 0);
     mesh.indices.push_back(offset + 1);
     mesh.indices.push_back(offset + 2);
-    // Triangle 2 (2, 3, 0)
+    // What if we have more or less indices?
     mesh.indices.push_back(offset + 2);
     mesh.indices.push_back(offset + 3);
     mesh.indices.push_back(offset + 0);
+    // How many triangles can we render from 4 vertices?
   }
   return mesh;
 }
@@ -112,7 +119,6 @@ std::string loadShaderSource(const std::string &filePath) {
 
 const std::string vertexShaderSource = R"(
 #version 330 core
-// layout (location = 0) in vec2 aPos;
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aColor;
 
@@ -123,29 +129,11 @@ uniform mat4 u_projection;
 uniform mat4 u_model;
 
 void main() {
-  float pi = 3.14;
-  float angle = pi;
-
-  mat4 wtf = mat4(
-    1.0, 0.0,         0.0,        0.0,
-    0.0, cos(angle),  sin(angle), 0.0,
-    0.0, -sin(angle), cos(angle), 0.0,
-    0.0, 0.0,         0.0,        1.0
-  );
-
-  mat4 model = mat4(
-      1.0, 0.0, 0.0, 0.0,
-      0.0, 1.0, 0.0, 0.0,
-      0.0, 0.0, 1.0, 0.0,
-      0.0, 0.0, -10.0, 1.0
-  );
-
   // TODO: Render parametric sphere, shade it, and check it out in 3D
 
   // TODO: Rotate a cube and inspect its sides
 
-  // gl_Position = u_projection * u_view * model * vec4(aPos, -1, 1.0);
-  gl_Position = u_projection * u_view * u_model * wtf * vec4(aPos, 1.0); 
+  gl_Position = u_projection * u_view * u_model * vec4(aPos, 1.0); 
   vColor = aColor;
 }
 )";
@@ -390,10 +378,11 @@ int main() {
                cubeMesh.indices.size() * sizeof(unsigned int),
                cubeMesh.indices.data(), GL_STATIC_DRAW);
 
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
   glEnableVertexAttribArray(0);
 
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(3 * sizeof(float)));
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)(3 * sizeof(float)));
   glEnableVertexAttribArray(1);
 
   glBindVertexArray(0);
@@ -410,27 +399,36 @@ int main() {
   float yaw = 0.0f;
   float pitch = 0.0f;
 
-  const glm::vec3 eye{0.0f, 0.0f, 0.0f};
+  glm::vec3 eye{0.0f, 0.0f, 0.0f};
 
   const float sensitivity = 0.01f;
 
-  glm::mat4 translateMatrix {
-    1.0f, 0.0f,  0.0f,  0.0f,
-    0.0f, 1.0f,  0.0f,  0.0f,
-    0.0f, 0.0f,  1.0f,  0.0f,
-    0.0f, 0.0f, -10.0f, 1.0f,
+  // clang-format off
+  glm::mat4 translateMatrix{
+      1.0f, 0.0f,  0.0f,  0.0f,
+      0.0f, 1.0f,  0.0f,  0.0f,
+      0.0f, 0.0f,  1.0f,  0.0f,
+      0.0f, 0.0f, -10.0f, 1.0f,
   };
+  // clang-format on
 
   const float angle = glm::pi<float>() / 6;
 
-  glm::mat4 rotateMatrix {
-    1.0f, 0.0f,  0.0f,  0.0f,
-    0.0f, glm::cos(angle),  -glm::sin(angle),  0.0f,
-    0.0f, glm::sin(angle),  glm::cos(angle),  0.0f,
-    0.0f, 0.0f, -0.0f, 1.0f,
+  // clang-format off
+  glm::mat4 rotateMatrix{
+      1.0f, 0.0f,              0.0f,             0.0f,
+      0.0f, glm::cos(angle),  -glm::sin(angle),  0.0f,
+      0.0f, glm::sin(angle),   glm::cos(angle),  0.0f,
+      0.0f, 0.0f,             -0.0f,             1.0f,
   };
+  // clang-format on
 
   glm::mat4 modelMatrix = translateMatrix * rotateMatrix;
+
+  Uint64 lastTime{SDL_GetTicks()};
+  float deltaTime{0.0f};
+
+  const float velocity{10.0f};
 
   while (running) {
     while (SDL_PollEvent(&event)) {
@@ -443,6 +441,8 @@ int main() {
         glViewport(0, 0, window_width, window_height);
       }
       if (event.type == SDL_EVENT_MOUSE_MOTION) {
+        // TODO: Ues recommended way to extract mouse movement coordinates.
+        // SDL_GetMouseState
         float xrel{event.motion.xrel};
         float yrel{event.motion.yrel};
 
@@ -458,6 +458,10 @@ int main() {
       }
     }
 
+    const Uint64 currentTime{SDL_GetTicks()};
+    deltaTime = (currentTime - lastTime) / 1000.0f;
+    lastTime = currentTime;
+
     const float radYaw{glm::radians(yaw)};
     const float radPitch{glm::radians(pitch)};
 
@@ -466,13 +470,44 @@ int main() {
     direction.y = glm::sin(radPitch);
     direction.z = -glm::cos(radYaw) * glm::cos(radPitch);
 
+    // TODO: Use quaternions (after fully understanding them)
+    // Still prone to gimbal lock problem, hence should use quaternions
+    // eventually
     glm::vec3 forward{glm::normalize(direction)};
-    glm::vec3 center{eye + forward};
     glm::vec3 worldUp{0.0f, 1.0f, 0.0f};
+    glm::vec3 right{glm::normalize(glm::cross(forward, worldUp))};
+    glm::vec3 up{glm::normalize(glm::cross(right, forward))};
 
-    glm::mat4 viewMatrix{lookAt(eye, center, worldUp)};
+    const float speed{velocity * deltaTime};
 
-    const float _time = SDL_GetTicks() / 500.0f;
+    // Exhaust latest events
+    // SDL_PumpEvents();
+    const bool *keystate = SDL_GetKeyboardState(NULL);
+    if (keystate[SDL_SCANCODE_W]) {
+      eye += forward * speed;
+    }
+    if (keystate[SDL_SCANCODE_S]) {
+      eye -= forward * speed;
+    }
+    if (keystate[SDL_SCANCODE_A]) {
+      eye -= right * speed;
+    }
+    if (keystate[SDL_SCANCODE_D]) {
+      eye += right * speed;
+    }
+    if (keystate[SDL_SCANCODE_SPACE]) {
+      eye += up * speed;
+    }
+    if (keystate[SDL_SCANCODE_LCTRL]) {
+      eye -= up * speed;
+    }
+
+    glm::mat4 viewMatrix{
+        lookAt(eye,
+               // Cancel out the eye vector to form a free look at matrix
+               eye + forward, worldUp)};
+
+    // const float _time = SDL_GetTicks() / 500.0f;
 
     /* RENDER */
     glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
