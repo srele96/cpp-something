@@ -9,12 +9,16 @@
 #include "SDL3/SDL_keyboard.h"
 #include "SDL3/SDL_scancode.h"
 #include "SDL3/SDL_timer.h"
+#include "SDL3/SDL_video.h"
 #include "glad/glad.h"
 #include "glm/ext/scalar_constants.hpp"
 #include "glm/gtc/type_ptr.hpp"
 #include "glm/mat4x4.hpp" // IWYU pragma: keep
 #include "glm/trigonometric.hpp"
 #include "glm/vec3.hpp" // IWYU pragma: keep
+
+#define GLM_ENABLE_EXPERIMENTAL
+#include "glm/gtx/rotate_vector.hpp" // This API is supposedly "experimental" for the past 10 years.
 
 struct Vertex {
   glm::vec3 pos;
@@ -73,6 +77,65 @@ MeshData generateCube(float side) {
     // How many triangles can we render from 4 vertices?
   }
   return mesh;
+}
+
+glm::vec3 sphericalCoord(const float yaw, const float pitch,
+                         const float r = 1) {
+  glm::vec3 coord{
+      glm::sin(yaw) * glm::cos(pitch), //
+      glm::sin(pitch),                 //
+      -glm::cos(yaw) * glm::cos(pitch) //
+  };
+  return r * coord;
+}
+
+struct SphereMesh {
+  std::vector<glm::vec3> vertices;
+  std::vector<unsigned int> indices;
+};
+
+SphereMesh generateSphere(const int latitudeBands, const int longitudeBands,
+                          const float r = 1) {
+  SphereMesh sphereMesh;
+
+  const float pi{glm::pi<float>()};
+
+  for (int i{0}; i <= latitudeBands; ++i) {
+    const float floatI{static_cast<float>(i)};
+    const float floatLatitudeBands{static_cast<float>(latitudeBands)};
+
+    const float pitch{pi / 2 - (floatI / floatLatitudeBands) * pi};
+
+    for (int j{0}; j <= longitudeBands; ++j) {
+      const float floatJ{static_cast<float>(j)};
+      const float floatLongitudeBands{static_cast<float>(longitudeBands)};
+
+      const float yaw{(floatJ / floatLongitudeBands) * 2 * pi};
+
+      sphereMesh.vertices.push_back(sphericalCoord(yaw, pitch, r));
+    }
+  }
+
+  for (int i{0}; i < latitudeBands; ++i) {
+    for (int j{0}; j < longitudeBands; ++j) {
+      const int rowStride{longitudeBands + 1};
+
+      const int topLeft{i * rowStride + j};
+      const int topRight{topLeft + 1};
+      const int bottomLeft{(i + 1) * rowStride + j};
+      const int bottomRight{bottomLeft + 1};
+
+      sphereMesh.indices.push_back(topLeft);
+      sphereMesh.indices.push_back(topRight);
+      sphereMesh.indices.push_back(bottomLeft);
+
+      sphereMesh.indices.push_back(topRight);
+      sphereMesh.indices.push_back(bottomRight);
+      sphereMesh.indices.push_back(bottomLeft);
+    }
+  }
+
+  return sphereMesh;
 }
 
 glm::mat4 lookAt(const glm::vec3 &eye, const glm::vec3 &center,
@@ -145,8 +208,15 @@ out vec4 FragColor;
 in vec3 vColor;
 
 void main() {
-  // FragColor = vec4(0.2, 0.8, 0.3, 1.0);
-  FragColor = vec4(vColor, 1.0);
+  // TODO: Due to lack of shading, color each triangle in a different color to
+  // achieve perception of depth.
+  float r = fract(sin(float(gl_PrimitiveID) * 12.9898) * 43758.5453);
+  float g = fract(sin(float(gl_PrimitiveID) * 78.2330) * 43758.5453);
+  float b = fract(sin(float(gl_PrimitiveID) * 45.1640) * 43758.5453);
+
+  FragColor = vec4(r, g, b, 1.0);
+
+  // FragColor = vec4(vColor, 1.0);
 }
 )";
 
@@ -236,6 +306,8 @@ std::vector<float> generateSineWave(int samples) {
 // }
 
 int main() {
+  /////////////////////////////////////////////////////////////////////////////
+
   if (SDL_Init(SDL_INIT_VIDEO) < 0) {
     std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
     return 1;
@@ -259,6 +331,10 @@ int main() {
 
   SDL_GLContext context = SDL_GL_CreateContext(window);
 
+  // Synchronize the loop with the monitor refresh rate
+  // This one line reduces gpu usage from 85% to <=5%
+  SDL_GL_SetSwapInterval(1);
+
   if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
     std::cerr << "Failed to initialize GLAD\n";
   }
@@ -270,6 +346,8 @@ int main() {
   /* CREATE VERTICES */
   std::vector<float> vertices = generateSineWave(500);
   int vertexCount = vertices.size() / 2;
+
+  /////////////////////////////////////////////////////////////////////////////
 
   /* SHADER PROGRAM */
 
@@ -300,6 +378,8 @@ int main() {
   GLint projectionLocation{glGetUniformLocation(shaderProgram, "u_projection")};
   GLint modelLocation{glGetUniformLocation(shaderProgram, "u_model")};
 
+  /////////////////////////////////////////////////////////////////////////////
+
   /* VAO + VBO */
 
   /*
@@ -329,6 +409,8 @@ int main() {
     glBindVertexArray(0);
   */
 
+  /////////////////////////////////////////////////////////////////////////////
+
   // TODO: Stop thinking in terms of [-1, 1] NDC and use world or model space
   // coordinates to create models? Quad, create vertices
   // clang-format off
@@ -354,6 +436,8 @@ int main() {
 
   glBindVertexArray(0);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+  /////////////////////////////////////////////////////////////////////////////
 
   struct Wtf {
     GLuint VAO, VBO, EBO;
@@ -387,6 +471,46 @@ int main() {
 
   glBindVertexArray(0);
 
+  /////////////////////////////////////////////////////////////////////////////
+
+  // I think it would be great if i had a class that handles fragment shader,
+  // buffer creation, accepting and passing down uniforms, using the shader
+  // during rendering, ...
+  struct SphereBuffers {
+    GLuint VAO, VBO, EBO;
+  };
+
+  const int latitudeBands{30};
+  const int longitudeBands{30};
+  SphereMesh sphereMesh{generateSphere(latitudeBands, longitudeBands, 8.0f)};
+
+  SphereBuffers sphereBuffers;
+
+  glGenVertexArrays(1, &sphereBuffers.VAO);
+  glGenBuffers(1, &sphereBuffers.VBO);
+  glGenBuffers(1, &sphereBuffers.EBO);
+
+  glBindVertexArray(sphereBuffers.VAO);
+
+  glBindBuffer(GL_ARRAY_BUFFER, sphereBuffers.VBO);
+  glBufferData(GL_ARRAY_BUFFER, sphereMesh.vertices.size() * sizeof(glm::vec3),
+               sphereMesh.vertices.data(), GL_STATIC_DRAW);
+
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sphereBuffers.EBO);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+               sphereMesh.indices.size() * sizeof(unsigned int),
+               sphereMesh.indices.data(), GL_STATIC_DRAW);
+
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void *)0);
+  glEnableVertexAttribArray(0);
+
+  // Disable attribute 1, so we can feed it value before render call
+  glDisableVertexAttribArray(1);
+
+  glBindVertexArray(0);
+
+  /////////////////////////////////////////////////////////////////////////////
+
   bool running = true;
   SDL_Event event;
 
@@ -401,7 +525,7 @@ int main() {
 
   glm::vec3 eye{0.0f, 0.0f, 0.0f};
 
-  const float sensitivity = 0.01f;
+  const float sensitivity = 0.05f;
 
   // clang-format off
   glm::mat4 translateMatrix{
@@ -423,12 +547,23 @@ int main() {
   };
   // clang-format on
 
-  glm::mat4 modelMatrix = translateMatrix * rotateMatrix;
+  glm::mat4 modelMatrix{translateMatrix * rotateMatrix};
+
+  glm::mat4 sphereModelMatrix{glm::translate(glm::identity<glm::mat4>(),
+                                             glm::vec3(0.0f, 0.0f, -25.0f))};
 
   Uint64 lastTime{SDL_GetTicks()};
   float deltaTime{0.0f};
 
   const float velocity{10.0f};
+
+  struct Look {
+    glm::vec3 forward{0.0f, 0.0f, -1.0f};
+    glm::vec3 right{1.0f, 0.0f, 0.0f};
+    glm::vec3 up{0.0f, 1.0f, 0.0f};
+  };
+
+  Look look;
 
   while (running) {
     while (SDL_PollEvent(&event)) {
@@ -441,20 +576,48 @@ int main() {
         glViewport(0, 0, window_width, window_height);
       }
       if (event.type == SDL_EVENT_MOUSE_MOTION) {
+        // TODO: Mathematically check when do the two axes collapse and cause an
+        // euler angle flip. Is this a gimbal lock? Check visually too, etc...
+
         // TODO: Ues recommended way to extract mouse movement coordinates.
         // SDL_GetMouseState
+        // The xrel and yrel give a relative movement since the last frame,
+        // which is awesome. We don't have to compute delta values.
         float xrel{event.motion.xrel};
         float yrel{event.motion.yrel};
 
-        yaw += xrel * sensitivity;
-        pitch -= yrel * sensitivity;
+        const float deltaYaw{xrel * sensitivity};
+        const float deltaPitch{yrel * sensitivity};
+        yaw += deltaYaw;
+        pitch -= deltaPitch;
 
-        if (pitch > 89.0f) {
-          pitch = 89.0f;
-        }
-        if (pitch < -89.0f) {
-          pitch = -89.0f;
-        }
+        // NOTE: The forward direction vector is derived by the following linear
+        // algebra multiplication, where +x is right, and -z is front:
+        // Ry(pitch)*Rx(yaw)*Vec(0,0,-1)
+        // The logic belows essentially implements exactly that for front
+        // vector.
+
+        // TODO: Is there a stable API instead of experimental glm::rotate? The
+        // one simple as similar to glm::rotate?
+
+        // NOTE: This direction computation removes the need for static world up
+        // vector, but introduces roll when mouse moves in circles across the
+        // screen. Be aware of this behavior.
+
+        look.forward =
+            glm::rotate(look.forward, glm::radians(-deltaPitch), look.right);
+        look.up = glm::rotate(look.up, glm::radians(-deltaPitch), look.right);
+
+        look.forward =
+            glm::rotate(look.forward, glm::radians(-deltaYaw), look.up);
+        look.right = glm::rotate(look.right, glm::radians(-deltaYaw), look.up);
+
+        look.forward = glm::normalize(look.forward);
+        look.right = glm::normalize(look.right);
+        look.up = glm::normalize(look.up);
+
+        // TODO: Use quaternions because they are superior for 3d rotations and
+        // avoid gimbal lock and euler angle flip problems.
       }
     }
 
@@ -462,21 +625,9 @@ int main() {
     deltaTime = (currentTime - lastTime) / 1000.0f;
     lastTime = currentTime;
 
-    const float radYaw{glm::radians(yaw)};
-    const float radPitch{glm::radians(pitch)};
-
-    glm::vec3 direction;
-    direction.x = glm::sin(radYaw) * glm::cos(radPitch);
-    direction.y = glm::sin(radPitch);
-    direction.z = -glm::cos(radYaw) * glm::cos(radPitch);
-
     // TODO: Use quaternions (after fully understanding them)
     // Still prone to gimbal lock problem, hence should use quaternions
     // eventually
-    glm::vec3 forward{glm::normalize(direction)};
-    glm::vec3 worldUp{0.0f, 1.0f, 0.0f};
-    glm::vec3 right{glm::normalize(glm::cross(forward, worldUp))};
-    glm::vec3 up{glm::normalize(glm::cross(right, forward))};
 
     const float speed{velocity * deltaTime};
 
@@ -484,28 +635,28 @@ int main() {
     // SDL_PumpEvents();
     const bool *keystate = SDL_GetKeyboardState(NULL);
     if (keystate[SDL_SCANCODE_W]) {
-      eye += forward * speed;
+      eye += look.forward * speed;
     }
     if (keystate[SDL_SCANCODE_S]) {
-      eye -= forward * speed;
+      eye -= look.forward * speed;
     }
     if (keystate[SDL_SCANCODE_A]) {
-      eye -= right * speed;
+      eye -= look.right * speed;
     }
     if (keystate[SDL_SCANCODE_D]) {
-      eye += right * speed;
+      eye += look.right * speed;
     }
     if (keystate[SDL_SCANCODE_SPACE]) {
-      eye += up * speed;
+      eye += look.up * speed;
     }
     if (keystate[SDL_SCANCODE_LCTRL]) {
-      eye -= up * speed;
+      eye -= look.up * speed;
     }
 
     glm::mat4 viewMatrix{
         lookAt(eye,
                // Cancel out the eye vector to form a free look at matrix
-               eye + forward, worldUp)};
+               eye + look.forward, look.up)};
 
     // const float _time = SDL_GetTicks() / 500.0f;
 
@@ -532,6 +683,12 @@ int main() {
 
     glBindVertexArray(wtf.VAO);
     glDrawElements(GL_TRIANGLES, cubeMesh.indices.size(), GL_UNSIGNED_INT, 0);
+
+    glUniformMatrix4fv(modelLocation, 1, GL_FALSE,
+                       glm::value_ptr(sphereModelMatrix));
+    glVertexAttrib3f(1, 1.0f, 1.0f, 0.0f);
+    glBindVertexArray(sphereBuffers.VAO);
+    glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
     /* ISSUE RENDER DIRECTIVE */
     SDL_GL_SwapWindow(window);
