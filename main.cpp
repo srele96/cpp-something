@@ -23,6 +23,7 @@
 struct Vertex {
   glm::vec3 pos;
   glm::vec3 color;
+  glm::vec3 normal;
 };
 
 struct MeshData {
@@ -54,14 +55,18 @@ MeshData generateCube(float side) {
     glm::vec3 center = f.normal * h;
 
     // Add 4 edge vertices
-    mesh.vertices.push_back(
-        {center - (f.right * h) - (f.up * h), f.color}); // BottomLeft
-    mesh.vertices.push_back(
-        {center + (f.right * h) - (f.up * h), f.color}); // TopLeft
-    mesh.vertices.push_back(
-        {center + (f.right * h) + (f.up * h), f.color}); // TopRight
-    mesh.vertices.push_back(
-        {center - (f.right * h) + (f.up * h), f.color}); // BottomRight
+    mesh.vertices.push_back({.pos = center - (f.right * h) - (f.up * h),
+                             .color = f.color,
+                             .normal = f.normal}); // BottomLeft
+    mesh.vertices.push_back({.pos = center + (f.right * h) - (f.up * h),
+                             .color = f.color,
+                             .normal = f.normal}); // TopLeft
+    mesh.vertices.push_back({.pos = center + (f.right * h) + (f.up * h),
+                             .color = f.color,
+                             .normal = f.normal}); // TopRight
+    mesh.vertices.push_back({.pos = center - (f.right * h) + (f.up * h),
+                             .color = f.color,
+                             .normal = f.normal}); // BottomRight
 
     // Add face indices
     unsigned int offset = i * 4;
@@ -90,7 +95,7 @@ glm::vec3 sphericalCoord(const float yaw, const float pitch,
 }
 
 struct SphereMesh {
-  std::vector<glm::vec3> vertices;
+  std::vector<Vertex> vertices;
   std::vector<unsigned int> indices;
 };
 
@@ -112,7 +117,15 @@ SphereMesh generateSphere(const int latitudeBands, const int longitudeBands,
 
       const float yaw{(floatJ / floatLongitudeBands) * 2 * pi};
 
-      sphereMesh.vertices.push_back(sphericalCoord(yaw, pitch, r));
+      const glm::vec3 normal{sphericalCoord(yaw, pitch, 1)};
+
+      const glm::vec3 white{1.0f, 1.0f, 1.0f};
+
+      sphereMesh.vertices.push_back({
+          .pos = r * normal,
+          .color = white,
+          .normal = normal,
+      });
     }
   }
 
@@ -184,8 +197,11 @@ const std::string vertexShaderSource = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aColor;
+layout (location = 2) in vec3 aNormal;
 
 out vec3 vColor;
+out vec3 vNormal;
+out vec3 vFragPos;
 
 uniform mat4 u_view;
 uniform mat4 u_projection;
@@ -196,8 +212,28 @@ void main() {
 
   // TODO: Rotate a cube and inspect its sides
 
-  gl_Position = u_projection * u_view * u_model * vec4(aPos, 1.0); 
+  // TODO: Figure out mathematics in desmos3d and on paper to deeply understand
+  // why it is necessary to work in the world space with the light position.
+  vec4 worldPosition = u_model * vec4(aPos, 1.0);
+
+  // To make the lighting color math to work, the computation must happen in the same space. We must not mix spaces.
+  vFragPos = vec3(worldPosition);
+
+  gl_Position = u_projection * u_view * worldPosition;
+
   vColor = aColor;
+
+  // Why do we have to inverse and transpose?
+  // We also don't get normal through projection & view matrix
+  // We also do use u_model but why inverse and transpose?
+  //
+  // I don't understand this step! And additionally, my lighting behaves very
+  // weird, specular highlight does not follow camera, rather it moves in
+  // oposite direction!
+  //
+  // Translation breaks normals. Inverse and trapose helps prevent translation
+  // from breaking the normals.
+  vNormal = mat3(transpose(inverse(u_model))) * aNormal;
 }
 )";
 
@@ -206,19 +242,77 @@ const std::string fragmentShaderSource = R"(
 out vec4 FragColor;
 
 in vec3 vColor;
+in vec3 vNormal;
+in vec3 vFragPos;
+
+uniform vec3 u_eyePosition;
+uniform vec3 u_lightPosition;
 
 void main() {
+  /////////////////////////////////////////////////////////////////////////////
+  // TODO: Write a more elaborate explanation in graphics-docs repo.
+  //
+  // NOTE:
+  //
+  // In order to get the lighting computation correctly, we MUST understand the
+  // concept of spaces.
+  //
+  // - MODEL SPACE
+  // - WORLD SPACE
+  // - CAMERA SPACE
+  // - CLIP SPACE
+  //
+  // The model space lives after model has been modified by the model matrix.
+  // The model matrix moves the model from model space to the world space.
+  // Every object lives in a world space. Imagine 4d being observing a 3d
+  // world, everything seen AS IS is a world space. Hence, for the CURRENT
+  // light computation, we want every object to live in the world space.
+  /////////////////////////////////////////////////////////////////////////////
+
+  vec3 lightColor = vec3(1.0, 1.0, 1.0);
+
+  // AMBIENT
+  float ambientStrength = 0.15;
+  vec3 ambient = ambientStrength * lightColor;
+
+  // We must normalize it because interpolation might break normals.
+  vec3 normal = normalize(vNormal);
+
+  vec3 lightDirection = normalize(u_lightPosition - vFragPos);
+
+  // DIFFUSE
+  float diff = max(dot(normal, lightDirection), 0.0);
+  vec3 diffuse = diff * lightColor;
+
+  // SPECULAR
+  vec3 eyeDirection = normalize(u_eyePosition - vFragPos);
+  vec3 reflectionDirection = reflect(-lightDirection, normal);
+
+  float specularStrength = 0.5;
+  float spec = pow(max(dot(eyeDirection, reflectionDirection), 0.0), 32);
+  vec3 specular = specularStrength * spec * lightColor;
+
   // TODO: Due to lack of shading, color each triangle in a different color to
   // achieve perception of depth.
   float r = fract(sin(float(gl_PrimitiveID) * 12.9898) * 43758.5453);
   float g = fract(sin(float(gl_PrimitiveID) * 78.2330) * 43758.5453);
   float b = fract(sin(float(gl_PrimitiveID) * 45.1640) * 43758.5453);
 
-  FragColor = vec4(r, g, b, 1.0);
+  vec3 baseColor = vec3(r, g, b);
 
-  // FragColor = vec4(vColor, 1.0);
+  // FragColor = vec4(r, g, b, 1.0);
+
+  vec3 fragmentColor = (ambient + diffuse + specular) * vColor;
+
+  FragColor = vec4(fragmentColor, 1.0);
 }
 )";
+
+// TODO: Render a plane and use calculus to make it more interesting. Procedural
+// terrain generation?
+
+// TODO: Render a pipe in a sinus & cosinus shape. Remove the dead code which
+// used to render sinus wave.
 
 // const std::string vertexShaderSource = R"(
 // #version 330 core
@@ -262,6 +356,8 @@ void main() {
 // }
 // )";
 
+// TODO: Maybe allow usage of #define in shader source? But that doesnt seem to
+// be opengl feature but rather wittiness of c++ developers.
 GLuint compileShader(GLenum type, const std::string &source) {
   GLuint shader = glCreateShader(type);
 
@@ -377,6 +473,10 @@ int main() {
   GLint viewLocation{glGetUniformLocation(shaderProgram, "u_view")};
   GLint projectionLocation{glGetUniformLocation(shaderProgram, "u_projection")};
   GLint modelLocation{glGetUniformLocation(shaderProgram, "u_model")};
+  GLint eyePositionLocation{
+      glGetUniformLocation(shaderProgram, "u_eyePosition")};
+  GLint lightPositionLocation{
+      glGetUniformLocation(shaderProgram, "u_lightPosition")};
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -469,6 +569,10 @@ int main() {
                         (void *)(3 * sizeof(float)));
   glEnableVertexAttribArray(1);
 
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(2);
+
   glBindVertexArray(0);
 
   /////////////////////////////////////////////////////////////////////////////
@@ -493,7 +597,7 @@ int main() {
   glBindVertexArray(sphereBuffers.VAO);
 
   glBindBuffer(GL_ARRAY_BUFFER, sphereBuffers.VBO);
-  glBufferData(GL_ARRAY_BUFFER, sphereMesh.vertices.size() * sizeof(glm::vec3),
+  glBufferData(GL_ARRAY_BUFFER, sphereMesh.vertices.size() * sizeof(Vertex),
                sphereMesh.vertices.data(), GL_STATIC_DRAW);
 
   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sphereBuffers.EBO);
@@ -501,11 +605,15 @@ int main() {
                sphereMesh.indices.size() * sizeof(unsigned int),
                sphereMesh.indices.data(), GL_STATIC_DRAW);
 
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void *)0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
   glEnableVertexAttribArray(0);
 
   // Disable attribute 1, so we can feed it value before render call
   glDisableVertexAttribArray(1);
+
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(2);
 
   glBindVertexArray(0);
 
@@ -527,30 +635,20 @@ int main() {
 
   const float sensitivity = 0.05f;
 
-  // clang-format off
-  glm::mat4 translateMatrix{
-      1.0f, 0.0f,  0.0f,  0.0f,
-      0.0f, 1.0f,  0.0f,  0.0f,
-      0.0f, 0.0f,  1.0f,  0.0f,
-      0.0f, 0.0f, -10.0f, 1.0f,
-  };
-  // clang-format on
-
+  glm::mat4 modelMatrix{1.0f};
   const float angle = glm::pi<float>() / 6;
 
-  // clang-format off
-  glm::mat4 rotateMatrix{
-      1.0f, 0.0f,              0.0f,             0.0f,
-      0.0f, glm::cos(angle),  -glm::sin(angle),  0.0f,
-      0.0f, glm::sin(angle),   glm::cos(angle),  0.0f,
-      0.0f, 0.0f,             -0.0f,             1.0f,
-  };
-  // clang-format on
-
-  glm::mat4 modelMatrix{translateMatrix * rotateMatrix};
+  // TRS rule of thumb
+  // Position = M_Translate * M_Rotate * M_Scale * V_Position
+  modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, 0.0f, -10.0f));
+  modelMatrix = glm::rotate(modelMatrix, angle, glm::vec3(1.0f, 0.0f, 0.0f));
 
   glm::mat4 sphereModelMatrix{glm::translate(glm::identity<glm::mat4>(),
                                              glm::vec3(0.0f, 0.0f, -25.0f))};
+
+  // TODO: Make light position an uniform and movable in the world. It should
+  // help me understand if light is behaving as expected.
+  glm::vec3 lightPosition{0.0f, -20.0f, -10.0f};
 
   Uint64 lastTime{SDL_GetTicks()};
   float deltaTime{0.0f};
@@ -675,6 +773,9 @@ int main() {
     glUniformMatrix4fv(projectionLocation, 1, GL_FALSE,
                        glm::value_ptr(projectionMatrix));
     glUniformMatrix4fv(modelLocation, 1, GL_FALSE, glm::value_ptr(modelMatrix));
+
+    glUniform3fv(eyePositionLocation, 1, glm::value_ptr(eye));
+    glUniform3fv(lightPositionLocation, 1, glm::value_ptr(lightPosition));
     // glUniform1f(timeLocation, _time);
     // glBindVertexArray(VAO);
 
@@ -686,6 +787,7 @@ int main() {
 
     glUniformMatrix4fv(modelLocation, 1, GL_FALSE,
                        glm::value_ptr(sphereModelMatrix));
+    // Set constant color
     glVertexAttrib3f(1, 1.0f, 1.0f, 0.0f);
     glBindVertexArray(sphereBuffers.VAO);
     glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
