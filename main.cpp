@@ -203,17 +203,21 @@ out vec3 vColor;
 out vec3 vNormal;
 out vec3 vFragPos;
 
+// Does it matter if we output this and we don't have geometry shader in the next stage?
+// Do we have to match VS_OUT and vs_out to be exactly same with different casing?
+out VS_OUT {
+  vec3 worldPos;
+  vec3 vNormal;
+  vec3 vColor;
+} vs_out;
+
 uniform mat4 u_view;
 uniform mat4 u_projection;
 uniform mat4 u_model;
 
 void main() {
-  // TODO: Render parametric sphere, shade it, and check it out in 3D
-
   // TODO: Rotate a cube and inspect its sides
 
-  // TODO: Figure out mathematics in desmos3d and on paper to deeply understand
-  // why it is necessary to work in the world space with the light position.
   vec4 worldPosition = u_model * vec4(aPos, 1.0);
 
   // To make the lighting color math to work, the computation must happen in the same space. We must not mix spaces.
@@ -223,19 +227,68 @@ void main() {
 
   vColor = aColor;
 
-  // Why do we have to inverse and transpose?
-  // We also don't get normal through projection & view matrix
-  // We also do use u_model but why inverse and transpose?
-  //
-  // I don't understand this step! And additionally, my lighting behaves very
-  // weird, specular highlight does not follow camera, rather it moves in
-  // oposite direction!
-  //
-  // Translation breaks normals. Inverse and trapose helps prevent translation
-  // from breaking the normals.
+  // Rotate and move normal with the vertex, but prevent scaling from messing
+  // up the normals perpendicularity.
   vNormal = mat3(transpose(inverse(u_model))) * aNormal;
+
+  vs_out.worldPos = worldPosition.xyz;
+  // Keep the outputs to keep the compatibility with fragment shader.
+  // Is it fine to access vNormal like this? Since it's marked as 'out'?
+  vs_out.vNormal = vNormal;
+  vs_out.vColor = vColor;
 }
 )";
+
+const std::string geometryShaderSource{R"(
+#version 330 core
+layout (triangles) in;
+layout (line_strip, max_vertices = 6) out;
+
+in VS_OUT {
+  vec3 worldPos;
+  vec3 vNormal;
+  vec3 vColor;
+} gs_in[];
+
+out vec3 vColor;
+
+// It is fine to declare uniforms with the same name, in different shaders.
+uniform mat4 u_view;
+uniform mat4 u_projection;
+
+// TODO: Make arrows instead of lines.
+void drawLine(int i) {
+  vColor = gs_in[i].vColor;
+
+  gl_Position = u_projection * u_view * vec4(gs_in[i].worldPos, 1.0);
+  EmitVertex();
+
+  vec3 tip = gs_in[i].worldPos + (gs_in[i].vNormal * 1.0);
+  gl_Position = u_projection * u_view * vec4(tip, 1.0);
+  EmitVertex();
+
+  EndPrimitive();
+}
+
+void main() {
+  // We should already have a normal? among regular input from vertex shader?
+  drawLine(0);
+  drawLine(1);
+  drawLine(2);
+}
+)"};
+
+const std::string debugFragmentShaderSource{R"(
+#version 330 core
+
+out vec4 FragColor;
+
+in vec3 vColor;
+
+void main() {
+  FragColor = vec4(vColor, 1.0);
+}
+)"};
 
 const std::string fragmentShaderSource = R"(
 #version 330 core
@@ -291,14 +344,6 @@ void main() {
   float specularStrength = 0.5;
   float spec = pow(max(dot(eyeDirection, reflectionDirection), 0.0), 32);
   vec3 specular = specularStrength * spec * lightColor;
-
-  // TODO: Due to lack of shading, color each triangle in a different color to
-  // achieve perception of depth.
-  float r = fract(sin(float(gl_PrimitiveID) * 12.9898) * 43758.5453);
-  float g = fract(sin(float(gl_PrimitiveID) * 78.2330) * 43758.5453);
-  float b = fract(sin(float(gl_PrimitiveID) * 45.1640) * 43758.5453);
-
-  vec3 baseColor = vec3(r, g, b);
 
   // FragColor = vec4(r, g, b, 1.0);
 
@@ -374,6 +419,18 @@ GLuint compileShader(GLenum type, const std::string &source) {
   }
 
   return shader;
+}
+
+void logLinkStatus(const GLuint shaderProgram) {
+  GLint success;
+
+  glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
+  if (!success) {
+    char infoLog[512];
+    glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
+    std::cerr << "Program link error:\n" << infoLog << std::endl;
+  }
+  std::cout << "Program link success.\n";
 }
 
 std::vector<float> generateSineWave(int samples) {
@@ -454,18 +511,28 @@ int main() {
   GLuint shaderProgram = glCreateProgram();
   glAttachShader(shaderProgram, vertexShader);
   glAttachShader(shaderProgram, fragmentShader);
+
   glLinkProgram(shaderProgram);
 
-  GLint success;
-  glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
-  if (!success) {
-    char infoLog[512];
-    glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
-    std::cerr << "Program link error:\n" << infoLog << std::endl;
-  }
+  logLinkStatus(shaderProgram);
+
+  GLuint debugGeometryShader{
+      compileShader(GL_GEOMETRY_SHADER, geometryShaderSource)};
+  GLuint debugFragmentShader{
+      compileShader(GL_FRAGMENT_SHADER, debugFragmentShaderSource)};
+  GLuint debugShaderProgram{glCreateProgram()};
+  glAttachShader(debugShaderProgram, vertexShader);
+  glAttachShader(debugShaderProgram, debugGeometryShader);
+  glAttachShader(debugShaderProgram, debugFragmentShader);
+
+  glLinkProgram(debugShaderProgram);
+
+  logLinkStatus(debugShaderProgram);
 
   glDeleteShader(vertexShader);
   glDeleteShader(fragmentShader);
+  glDeleteShader(debugGeometryShader);
+  glDeleteShader(debugFragmentShader);
 
   /* Shader program variable location */
 
@@ -477,6 +544,10 @@ int main() {
       glGetUniformLocation(shaderProgram, "u_eyePosition")};
   GLint lightPositionLocation{
       glGetUniformLocation(shaderProgram, "u_lightPosition")};
+
+  GLint debugViewLocation{glGetUniformLocation(debugShaderProgram, "u_view")};
+  GLint debugProjectionLocation{glGetUniformLocation(debugShaderProgram, "u_projection")};
+  GLint debugModelLocation{glGetUniformLocation(debugShaderProgram, "u_model")};
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -790,6 +861,16 @@ int main() {
     // Set constant color
     glVertexAttrib3f(1, 1.0f, 1.0f, 0.0f);
     glBindVertexArray(sphereBuffers.VAO);
+    glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
+
+    glUseProgram(debugShaderProgram);
+
+    glUniformMatrix4fv(debugViewLocation, 1, GL_FALSE, glm::value_ptr(viewMatrix));
+    glUniformMatrix4fv(debugProjectionLocation, 1, GL_FALSE,
+                       glm::value_ptr(projectionMatrix));
+    glUniformMatrix4fv(debugModelLocation, 1, GL_FALSE,
+                       glm::value_ptr(sphereModelMatrix));
+
     glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
     /* ISSUE RENDER DIRECTIVE */
