@@ -356,6 +356,12 @@ void main() {
   // light computation, we want every object to live in the world space.
   /////////////////////////////////////////////////////////////////////////////
 
+  // TODO: Find a way to reuse logic in shaders. I have duplicate shading
+  // computation.
+
+  // -----------------------------------
+  // Phong & Lambert shading -- BEGIN --
+
   vec3 lightColor = vec3(1.0, 1.0, 1.0);
 
   // AMBIENT
@@ -376,8 +382,11 @@ void main() {
   vec3 reflectionDirection = reflect(-lightDirection, normal);
 
   float specularStrength = 0.5;
-  float spec = pow(max(dot(eyeDirection, reflectionDirection), 0.0), 32);
+  float spec = pow(max(dot(eyeDirection, reflectionDirection), 0.0), 128);
   vec3 specular = specularStrength * spec * lightColor;
+
+  // Phong & Lambert shading -- END --
+  // ---------------------------------
 
   // FragColor = vec4(r, g, b, 1.0);
 
@@ -398,18 +407,19 @@ layout (location = 2) in vec3 aNormal;
 
 out vec3 vColor;
 out vec3 vFragPos;
+out vec3 vNormal;
 
 uniform mat4 u_view;
 uniform mat4 u_projection;
 uniform mat4 u_model;
-uniform vec3 u_eye;
+uniform vec3 u_eyePosition;
 
 void main() {
   vec4 worldPosition = u_model * vec4(aPos, 1.0);
 
   vec3 anchored = worldPosition.xyz;
-  anchored.x += u_eye.x;
-  anchored.z += u_eye.z;
+  anchored.x += u_eyePosition.x;
+  anchored.z += u_eyePosition.z;
   anchored.y = worldPosition.y;
 
   vFragPos = anchored;
@@ -417,18 +427,57 @@ void main() {
   gl_Position = u_projection * u_view * vec4(anchored, 1.0);
 
   vColor = aColor;
+  vNormal = mat3(transpose(inverse(u_model))) * aNormal;
 }
 )"};
+
+// TODO: Depth perspective. Objects in the scene do not block the light. Idea:
+// Two-Pass process. The shadow pass. The lighting pass. The shadow mapping?
 
 const std::string frag_floor{R"(
 #version 330 core
 
 in vec3 vColor;
 in vec3 vFragPos;
+in vec3 vNormal;
 
 out vec4 FragColor;
 
+uniform vec3 u_eyePosition;
+uniform vec3 u_lightPosition;
+
 void main() {
+  // -----------------------------------
+  // Phong & Lambert shading -- BEGIN --
+
+  // One gotcha: The specular intensity is still calculated for the vieweing
+  // side, even if the light is on the oposite side.
+
+  vec3 normal = normalize(vNormal);
+
+  vec3 lightColor = vec3(1.0, 1.0, 1.0);
+
+  // Ambient
+  float ambientStrength = 0.15;
+  vec3 ambientColor = ambientStrength * lightColor;
+
+  vec3 lightDirection = normalize(u_lightPosition - vFragPos);
+
+  // Diffuse
+  float diffuseIntensity = max(dot(lightDirection, normal), 0.0);
+  vec3 diffuseColor = diffuseIntensity * lightColor;
+
+  // Specular
+  vec3 lightReflection = reflect(-lightDirection, normal);
+  vec3 eyeDirection = normalize(u_eyePosition - vFragPos);
+
+  float specularStrength = 0.2;
+  float specularIntensity = pow(max(dot(eyeDirection, lightReflection), 0.0), 128);
+  vec3 specularColor = specularStrength * specularIntensity * lightColor;
+
+  // Phong & Lambert shading -- END --
+  // ---------------------------------
+
   // Make each checker sides 1 unit long
   vec2 pos = vFragPos.xz * 0.5;
 
@@ -441,9 +490,13 @@ void main() {
   // XOR
   float checker = abs(sX - sY);
 
+  vec3 checkerColor = vec3(checker);
+
+  vec3 fragmentColor = (ambientColor + diffuseColor + specularColor) * checkerColor;
+
   // TODO: Try out the fade factor, the further the checkerboard fragment is
   // from the eye, the more it is faded out
-  FragColor = vec4(vec3(checker), 1.0);
+  FragColor = vec4(fragmentColor, 1.0);
 }
 )"};
 
@@ -529,6 +582,10 @@ void logLinkStatus(const GLuint shaderProgram, const std::string &prefix = "") {
   std::cout << prefix << "Program link success.\n";
 }
 
+// TODO: Generate distortion over a plane. This is where we can practically
+// apply calculus.
+
+// TODO: Generate cylider, sinusoidal and cosinusoidal cylidern.
 std::vector<float> generateSineWave(int samples) {
   std::vector<float> vertices;
 
@@ -664,7 +721,10 @@ int main() {
       glGetUniformLocation(floorProgram, "u_projection")};
   GLint floorViewLocation{glGetUniformLocation(floorProgram, "u_view")};
   GLint floorModelLocation{glGetUniformLocation(floorProgram, "u_model")};
-  GLint floorEyeLocation{glGetUniformLocation(floorProgram, "u_eye")};
+  GLint floorEyePositionLocation{
+      glGetUniformLocation(floorProgram, "u_eyePosition")};
+  GLint floorLightPositionLocation{
+      glGetUniformLocation(floorProgram, "u_lightPosition")};
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -884,9 +944,9 @@ int main() {
   glm::mat4 sphereModelMatrix{glm::translate(glm::identity<glm::mat4>(),
                                              glm::vec3(0.0f, 8.0f, -25.0f))};
 
-  // TODO: Make light position an uniform and movable in the world. It should
-  // help me understand if light is behaving as expected.
-  glm::vec3 lightPosition{0.0f, -20.0f, -10.0f};
+  // TODO: Render light source object. Make light position movable in the world.
+  // It should help me understand if light is behaving as expected.
+  glm::vec3 lightPosition{0.0f, 20.0f, -10.0f};
 
   Uint64 lastTime{SDL_GetTicks()};
   float deltaTime{0.0f};
@@ -1056,7 +1116,8 @@ int main() {
                        glm::value_ptr(projectionMatrix));
     glUniformMatrix4fv(floorModelLocation, 1, GL_FALSE,
                        glm::value_ptr(floorModelMatrix));
-    glUniform3fv(floorEyeLocation, 1, glm::value_ptr(eye));
+    glUniform3fv(floorEyePositionLocation, 1, glm::value_ptr(eye));
+    glUniform3fv(floorLightPositionLocation, 1, glm::value_ptr(lightPosition));
 
     glBindVertexArray(floorBuffers.VAO);
     glDrawElements(GL_TRIANGLES, floorMesh.indices.size(), GL_UNSIGNED_INT, 0);
