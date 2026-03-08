@@ -2,9 +2,11 @@
 
 ## Docs
 
-Download sdl3 <https://github.com/libsdl-org/SDL/releases/tag/release-3.4.0> and put it in `sdl3` directory.
+Run the following comand to build the SDL3 dynamic library and copy it to the root.
 
-This should be automated, but it's not for now.
+```txt
+python sdl3.py
+```
 
 ```txt
 g++ main.cpp glad/src/glad.c -std=c++20 -I sdl2/include -I glad/include -L sdl2/lib -lSDL3 -lopengl32 -o main.exe && ./main.exe
@@ -16,7 +18,7 @@ g++ main.cpp glad/src/glad.c \
     -I glm \
     -I SDL3/include -I glad/include \
     -L SDL3/build -lSDL3 -lGL -ldl \
-    -Wl,-rpath,$(pwd)/SDL3/build \
+    -Wl,-rpath,'$ORIGIN' \
     -o main && ./main
 ```
 
