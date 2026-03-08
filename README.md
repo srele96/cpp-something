@@ -36,6 +36,6 @@ bear -- g++ main.cpp glad/src/glad.c \
     -I glm \
     -I SDL3/include -I glad/include \
     -L SDL3/build -lSDL3 -lGL -ldl \
-    -Wl,-rpath,$(pwd)/SDL3/build \
+    -Wl,-rpath,'$ORIGIN' \
     -o main && ./main
 ```
