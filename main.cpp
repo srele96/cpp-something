@@ -11,6 +11,7 @@
 #include "SDL3/SDL_timer.h"
 #include "SDL3/SDL_video.h"
 #include "glad/glad.h"
+#include "glm/ext/matrix_transform.hpp"
 #include "glm/ext/scalar_constants.hpp"
 #include "glm/gtc/type_ptr.hpp"
 #include "glm/mat4x4.hpp" // IWYU pragma: keep
@@ -149,6 +150,39 @@ SphereMesh generateSphere(const int latitudeBands, const int longitudeBands,
   }
 
   return sphereMesh;
+}
+
+// TODO: Figure out if light source should light the quad plane accordingly?
+// Because i want to use quad as a floor plane
+MeshData generateQuad() {
+  MeshData quad;
+
+  float edge{0.5f};
+
+  auto createVertex{[](const glm::vec3 &pos) -> Vertex {
+    const glm::vec3 color{1.0f, 1.0f, 1.0f};
+    const glm::vec3 normal{0.0f, 1.0f, 0.0f};
+
+    return {.pos = pos, .color = color, .normal = normal};
+  }};
+
+  /*
+    -0.5, 0, -0.5   left, front
+    0.5, 0, -0.5    right, front
+    0.5, 0, 0.5     right, back
+    -0.5, 0, 0.5    left, back
+  */
+
+  quad.vertices = {
+      createVertex({-edge, 0, -edge}), //
+      createVertex({edge, 0, -edge}),  //
+      createVertex({edge, 0, edge}),   //
+      createVertex({-edge, 0, edge}),  //
+  };
+
+  quad.indices = {0, 1, 2, 2, 3, 0};
+
+  return quad;
 }
 
 glm::mat4 lookAt(const glm::vec3 &eye, const glm::vec3 &center,
@@ -353,6 +387,68 @@ void main() {
 }
 )";
 
+namespace Shader::Source {
+
+const std::string vert_floor{R"(
+#version 330 core
+
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aColor;
+layout (location = 2) in vec3 aNormal;
+
+out vec3 vColor;
+out vec3 vFragPos;
+
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform mat4 u_model;
+uniform vec3 u_eye;
+
+void main() {
+  vec4 worldPosition = u_model * vec4(aPos, 1.0);
+
+  vec3 anchored = worldPosition.xyz;
+  anchored.x += u_eye.x;
+  anchored.z += u_eye.z;
+  anchored.y = worldPosition.y;
+
+  vFragPos = anchored;
+
+  gl_Position = u_projection * u_view * vec4(anchored, 1.0);
+
+  vColor = aColor;
+}
+)"};
+
+const std::string frag_floor{R"(
+#version 330 core
+
+in vec3 vColor;
+in vec3 vFragPos;
+
+out vec4 FragColor;
+
+void main() {
+  // Make each checker sides 1 unit long
+  vec2 pos = vFragPos.xz * 0.5;
+
+  vec2 f = fract(pos);
+
+  // The step() is faster if (f.x < 0.5) on GPU
+  float sX = step(0.5, f.x);
+  float sY = step(0.5, f.y);
+
+  // XOR
+  float checker = abs(sX - sY);
+
+  // TODO: Try out the fade factor, the further the checkerboard fragment is
+  // from the eye, the more it is faded out
+  FragColor = vec4(vec3(checker), 1.0);
+}
+)"};
+
+} // namespace Shader::Source
+
 // TODO: Render a plane and use calculus to make it more interesting. Procedural
 // terrain generation?
 
@@ -421,16 +517,16 @@ GLuint compileShader(GLenum type, const std::string &source) {
   return shader;
 }
 
-void logLinkStatus(const GLuint shaderProgram) {
+void logLinkStatus(const GLuint shaderProgram, const std::string &prefix = "") {
   GLint success;
 
   glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
   if (!success) {
     char infoLog[512];
     glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
-    std::cerr << "Program link error:\n" << infoLog << std::endl;
+    std::cerr << prefix << "Program link error:\n" << infoLog << std::endl;
   }
-  std::cout << "Program link success.\n";
+  std::cout << prefix << "Program link success.\n";
 }
 
 std::vector<float> generateSineWave(int samples) {
@@ -514,7 +610,7 @@ int main() {
 
   glLinkProgram(shaderProgram);
 
-  logLinkStatus(shaderProgram);
+  logLinkStatus(shaderProgram, "(shaderProgram) -");
 
   GLuint debugGeometryShader{
       compileShader(GL_GEOMETRY_SHADER, geometryShaderSource)};
@@ -527,12 +623,26 @@ int main() {
 
   glLinkProgram(debugShaderProgram);
 
-  logLinkStatus(debugShaderProgram);
+  logLinkStatus(debugShaderProgram, "(debugShaderProgram) - ");
+
+  GLuint floorVertexShader{
+      compileShader(GL_VERTEX_SHADER, Shader::Source::vert_floor)};
+  GLuint floorFragmentShader{
+      compileShader(GL_FRAGMENT_SHADER, Shader::Source::frag_floor)};
+
+  GLuint floorProgram{glCreateProgram()};
+  glAttachShader(floorProgram, floorVertexShader);
+  glAttachShader(floorProgram, floorFragmentShader);
+
+  glLinkProgram(floorProgram);
+
+  logLinkStatus(floorProgram, "(floorProgram) - ");
 
   glDeleteShader(vertexShader);
   glDeleteShader(fragmentShader);
   glDeleteShader(debugGeometryShader);
   glDeleteShader(debugFragmentShader);
+  glDeleteShader(floorFragmentShader);
 
   /* Shader program variable location */
 
@@ -546,8 +656,15 @@ int main() {
       glGetUniformLocation(shaderProgram, "u_lightPosition")};
 
   GLint debugViewLocation{glGetUniformLocation(debugShaderProgram, "u_view")};
-  GLint debugProjectionLocation{glGetUniformLocation(debugShaderProgram, "u_projection")};
+  GLint debugProjectionLocation{
+      glGetUniformLocation(debugShaderProgram, "u_projection")};
   GLint debugModelLocation{glGetUniformLocation(debugShaderProgram, "u_model")};
+
+  GLint floorProjectionLocation{
+      glGetUniformLocation(floorProgram, "u_projection")};
+  GLint floorViewLocation{glGetUniformLocation(floorProgram, "u_view")};
+  GLint floorModelLocation{glGetUniformLocation(floorProgram, "u_model")};
+  GLint floorEyeLocation{glGetUniformLocation(floorProgram, "u_eye")};
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -689,6 +806,56 @@ int main() {
   glBindVertexArray(0);
 
   /////////////////////////////////////////////////////////////////////////////
+  struct FloorBuffers {
+    GLuint VAO, VBO, EBO;
+  };
+
+  FloorBuffers floorBuffers;
+
+  glGenVertexArrays(1, &floorBuffers.VAO);
+  glGenBuffers(1, &floorBuffers.VBO);
+  glGenBuffers(1, &floorBuffers.EBO);
+
+  // All relevant calls refer to this VAO
+  glBindVertexArray(floorBuffers.VAO);
+
+  MeshData floorMesh{generateQuad()};
+
+  glBindBuffer(GL_ARRAY_BUFFER, floorBuffers.VBO);
+  glBufferData(GL_ARRAY_BUFFER,
+               // TODO: Perhaps mesh itself should know the size? In this way,
+               // we expose the type of the vertex data, which exposes
+               // internals, and may make changes difficult.
+               floorMesh.vertices.size() * sizeof(Vertex),
+               floorMesh.vertices.data(), GL_STATIC_DRAW);
+
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, floorBuffers.EBO);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+               floorMesh.indices.size() * sizeof(unsigned int),
+               floorMesh.indices.data(), GL_STATIC_DRAW);
+
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
+  glEnableVertexAttribArray(0);
+
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(1);
+
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(2);
+
+  // Clean up currently active VAO
+  glBindVertexArray(0);
+
+  glm::mat4 floorModelMatrix{glm::identity<glm::mat4>()};
+
+  // TODO: I wonder why is 100 units not enough to cover the whole frustum? The
+  // far variable is 100 units, so...
+  floorModelMatrix =
+      glm::scale(floorModelMatrix, glm::vec3(100.0f, 1.0f, 100.0f));
+
+  /////////////////////////////////////////////////////////////////////////////
 
   bool running = true;
   SDL_Event event;
@@ -711,11 +878,11 @@ int main() {
 
   // TRS rule of thumb
   // Position = M_Translate * M_Rotate * M_Scale * V_Position
-  modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, 0.0f, -10.0f));
+  modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, 4.0f, -10.0f));
   modelMatrix = glm::rotate(modelMatrix, angle, glm::vec3(1.0f, 0.0f, 0.0f));
 
   glm::mat4 sphereModelMatrix{glm::translate(glm::identity<glm::mat4>(),
-                                             glm::vec3(0.0f, 0.0f, -25.0f))};
+                                             glm::vec3(0.0f, 8.0f, -25.0f))};
 
   // TODO: Make light position an uniform and movable in the world. It should
   // help me understand if light is behaving as expected.
@@ -726,6 +893,12 @@ int main() {
 
   const float velocity{10.0f};
 
+  // TODO: Add a way to keep multiple cameras. One which has ability to rotated
+  // freely like current one, and another one with constrained pitch.
+  // TODO: Consider adding camera not capable of flying around.
+  // TODO: After adding another camera, debug if floor plane still does NOT
+  // follow the camera. (Edit: Nevermind, the plane does move infinitely
+  // alongside the camera.)
   struct Look {
     glm::vec3 forward{0.0f, 0.0f, -1.0f};
     glm::vec3 right{1.0f, 0.0f, 0.0f};
@@ -746,7 +919,8 @@ int main() {
       }
       if (event.type == SDL_EVENT_MOUSE_MOTION) {
         // TODO: Mathematically check when do the two axes collapse and cause an
-        // euler angle flip. Is this a gimbal lock? Check visually too, etc...
+        // euler angle flip. Is this a gimbal lock? (Edit: No, it's not a gimbal
+        // lock, but is known phenomenon) Check visually too, etc...
 
         // TODO: Ues recommended way to extract mouse movement coordinates.
         // SDL_GetMouseState
@@ -766,12 +940,12 @@ int main() {
         // The logic belows essentially implements exactly that for front
         // vector.
 
-        // TODO: Is there a stable API instead of experimental glm::rotate? The
-        // one simple as similar to glm::rotate?
-
         // NOTE: This direction computation removes the need for static world up
         // vector, but introduces roll when mouse moves in circles across the
         // screen. Be aware of this behavior.
+
+        // TODO: Use static UP world axis. Lock (-pi/2 < pitch < pi/2). Avoid
+        // roll effect.
 
         look.forward =
             glm::rotate(look.forward, glm::radians(-deltaPitch), look.right);
@@ -865,13 +1039,27 @@ int main() {
 
     glUseProgram(debugShaderProgram);
 
-    glUniformMatrix4fv(debugViewLocation, 1, GL_FALSE, glm::value_ptr(viewMatrix));
+    glUniformMatrix4fv(debugViewLocation, 1, GL_FALSE,
+                       glm::value_ptr(viewMatrix));
     glUniformMatrix4fv(debugProjectionLocation, 1, GL_FALSE,
                        glm::value_ptr(projectionMatrix));
     glUniformMatrix4fv(debugModelLocation, 1, GL_FALSE,
                        glm::value_ptr(sphereModelMatrix));
 
     glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
+
+    glUseProgram(floorProgram);
+
+    glUniformMatrix4fv(floorViewLocation, 1, GL_FALSE,
+                       glm::value_ptr(viewMatrix));
+    glUniformMatrix4fv(floorProjectionLocation, 1, GL_FALSE,
+                       glm::value_ptr(projectionMatrix));
+    glUniformMatrix4fv(floorModelLocation, 1, GL_FALSE,
+                       glm::value_ptr(floorModelMatrix));
+    glUniform3fv(floorEyeLocation, 1, glm::value_ptr(eye));
+
+    glBindVertexArray(floorBuffers.VAO);
+    glDrawElements(GL_TRIANGLES, floorMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
     /* ISSUE RENDER DIRECTIVE */
     SDL_GL_SwapWindow(window);
