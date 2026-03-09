@@ -1,5 +1,14 @@
 # cpp something
 
+## Todo
+
+- Render light source
+- Add another camera (abstract camera system)
+- Cylinder, Sinusoidal cylinder, Cosinusoidal cylinder
+- Textures
+- Shadow mapping
+- A library of primitives and render more complex shapes (a world)
+
 ## Docs
 
 Run the following comand to build the SDL3 dynamic library and copy it to the root.
