@@ -40,15 +40,17 @@ MeshData generateCube(float side) {
     glm::vec3 normal, right, up, color;
   };
 
+  glm::vec3 white{1.0f, 1.0f, 1.0f};
+
   // TODO: Play with math here to understand ins and outs of how and why this
   // works.
   std::vector<Face> faces = {
-      {{0, 0, 1}, {1, 0, 0}, {0, 1, 0}, {1, 0, 0}},   // Front
-      {{0, 0, -1}, {-1, 0, 0}, {0, 1, 0}, {0, 1, 0}}, // Back
-      {{0, 1, 0}, {1, 0, 0}, {0, 0, -1}, {0, 0, 1}},  // Top
-      {{0, -1, 0}, {1, 0, 0}, {0, 0, 1}, {1, 1, 0}},  // Bottom
-      {{1, 0, 0}, {0, 0, -1}, {0, 1, 0}, {0, 1, 1}},  // Right
-      {{-1, 0, 0}, {0, 0, 1}, {0, 1, 0}, {1, 0, 1}}   // Left
+      {{0, 0, 1}, {1, 0, 0}, {0, 1, 0}, white},   // Front
+      {{0, 0, -1}, {-1, 0, 0}, {0, 1, 0}, white}, // Back
+      {{0, 1, 0}, {1, 0, 0}, {0, 0, -1}, white},  // Top
+      {{0, -1, 0}, {1, 0, 0}, {0, 0, 1}, white},  // Bottom
+      {{1, 0, 0}, {0, 0, -1}, {0, 1, 0}, white},  // Right
+      {{-1, 0, 0}, {0, 0, 1}, {0, 1, 0}, white}   // Left
   };
 
   for (int i = 0; i < faces.size(); i++) {
@@ -95,14 +97,10 @@ glm::vec3 sphericalCoord(const float yaw, const float pitch,
   return r * coord;
 }
 
-struct SphereMesh {
-  std::vector<Vertex> vertices;
-  std::vector<unsigned int> indices;
-};
-
-SphereMesh generateSphere(const int latitudeBands, const int longitudeBands,
-                          const float r = 1) {
-  SphereMesh sphereMesh;
+MeshData generateSphere(const int latitudeBands, const int longitudeBands,
+                        const float r = 1,
+                        const glm::vec3 &color = {1.0f, 1.0f, 1.0f}) {
+  MeshData sphereMesh;
 
   const float pi{glm::pi<float>()};
 
@@ -124,7 +122,7 @@ SphereMesh generateSphere(const int latitudeBands, const int longitudeBands,
 
       sphereMesh.vertices.push_back({
           .pos = r * normal,
-          .color = white,
+          .color = color,
           .normal = normal,
       });
     }
@@ -165,13 +163,6 @@ MeshData generateQuad() {
 
     return {.pos = pos, .color = color, .normal = normal};
   }};
-
-  /*
-    -0.5, 0, -0.5   left, front
-    0.5, 0, -0.5    right, front
-    0.5, 0, 0.5     right, back
-    -0.5, 0, 0.5    left, back
-  */
 
   quad.vertices = {
       createVertex({-edge, 0, -edge}), //
@@ -250,8 +241,6 @@ uniform mat4 u_projection;
 uniform mat4 u_model;
 
 void main() {
-  // TODO: Rotate a cube and inspect its sides
-
   vec4 worldPosition = u_model * vec4(aPos, 1.0);
 
   // To make the lighting color math to work, the computation must happen in the same space. We must not mix spaces.
@@ -312,7 +301,7 @@ void main() {
 }
 )"};
 
-const std::string debugFragmentShaderSource{R"(
+const std::string basicFragmentShaderSource{R"(
 #version 330 core
 
 out vec4 FragColor;
@@ -362,7 +351,7 @@ void main() {
   // -----------------------------------
   // Phong & Lambert shading -- BEGIN --
 
-  vec3 lightColor = vec3(1.0, 1.0, 1.0);
+  vec3 lightColor = vec3(1.0, 0.98, 0.9);
 
   // AMBIENT
   float ambientStrength = 0.15;
@@ -388,9 +377,7 @@ void main() {
   // Phong & Lambert shading -- END --
   // ---------------------------------
 
-  // FragColor = vec4(r, g, b, 1.0);
-
-  vec3 fragmentColor = (ambient + diffuse + specular) * vColor;
+  vec3 fragmentColor = (ambient + diffuse) * vColor + specular;
 
   FragColor = vec4(fragmentColor, 1.0);
 }
@@ -455,7 +442,7 @@ void main() {
 
   vec3 normal = normalize(vNormal);
 
-  vec3 lightColor = vec3(1.0, 1.0, 1.0);
+  vec3 lightColor = vec3(1.0, 0.98, 0.9);
 
   // Ambient
   float ambientStrength = 0.15;
@@ -492,7 +479,7 @@ void main() {
 
   vec3 checkerColor = vec3(checker);
 
-  vec3 fragmentColor = (ambientColor + diffuseColor + specularColor) * checkerColor;
+  vec3 fragmentColor = (ambientColor + diffuseColor) * checkerColor + specularColor;
 
   // TODO: Try out the fade factor, the further the checkerboard fragment is
   // from the eye, the more it is faded out
@@ -507,48 +494,6 @@ void main() {
 
 // TODO: Render a pipe in a sinus & cosinus shape. Remove the dead code which
 // used to render sinus wave.
-
-// const std::string vertexShaderSource = R"(
-// #version 330 core
-// layout (location = 0) in vec2 aPos;
-// out vec2 vUV;
-
-// void main() {
-//   vUV = aPos * 0.5 + 0.5;
-
-//   gl_Position = vec4(aPos, 0.0, 1.0);
-// }
-// )";
-
-// const std::string fragmentShaderSource = R"(
-// #version 330 core
-// in vec2 vUV;
-// out vec4 FragColor;
-
-// uniform float time;
-
-// void main() {
-//   // map UV to NDC-ish space
-//   float x = vUV.x * 2.0 - 1.0;           // [-1,1]
-//   float y = vUV.y * 2.0 - 1.0;           // [-1,1]
-
-//   // sine curve y = A * sin(freq*x + time)
-//   float A = 0.3;
-//   float freq = 3.0;
-//   float curveY = A * sin(freq * x);
-
-//   // thickness in NDC units (smaller = thinner line)
-//   float thickness = 0.01;
-
-//   float d = abs(y - curveY);
-
-//   if (d < thickness)
-//       FragColor = vec4(0.2, 0.8, 0.3, 1.0);   // line color
-//   else
-//       FragColor = vec4(0.1, 0.1, 0.15, 1.0);  // background
-//   // FragColor = vec4(vUV, 0.0, 1.0);
-// }
-// )";
 
 // TODO: Maybe allow usage of #define in shader source? But that doesnt seem to
 // be opengl feature but rather wittiness of c++ developers.
@@ -586,30 +531,6 @@ void logLinkStatus(const GLuint shaderProgram, const std::string &prefix = "") {
 // apply calculus.
 
 // TODO: Generate cylider, sinusoidal and cosinusoidal cylidern.
-std::vector<float> generateSineWave(int samples) {
-  std::vector<float> vertices;
-
-  for (int i = 0; i < samples; ++i) {
-    float x = -1.0f + 2.0f * i / (samples - 1);
-    float y = glm::sin(x * 10.0f);
-
-    vertices.push_back(x);
-    vertices.push_back(y * 0.3f);
-  }
-
-  return vertices;
-}
-
-// std::vector<float> generateSineWave(int samples) {
-//   std::vector<float> vertices {
-//     -0.5f, -0.5f,
-//     0.5f, 0.5f,
-//     -0.5f, 0.5f,
-//     0.5f, -0.5f,
-//     -0.5f, 0.0f
-//   };
-//   return vertices;
-// }
 
 int main() {
   /////////////////////////////////////////////////////////////////////////////
@@ -649,10 +570,6 @@ int main() {
 
   glViewport(0, 0, window_width, window_height);
 
-  /* CREATE VERTICES */
-  std::vector<float> vertices = generateSineWave(500);
-  int vertexCount = vertices.size() / 2;
-
   /////////////////////////////////////////////////////////////////////////////
 
   /* SHADER PROGRAM */
@@ -671,16 +588,24 @@ int main() {
 
   GLuint debugGeometryShader{
       compileShader(GL_GEOMETRY_SHADER, geometryShaderSource)};
-  GLuint debugFragmentShader{
-      compileShader(GL_FRAGMENT_SHADER, debugFragmentShaderSource)};
+  GLuint basicFragmentShader{
+      compileShader(GL_FRAGMENT_SHADER, basicFragmentShaderSource)};
   GLuint debugShaderProgram{glCreateProgram()};
   glAttachShader(debugShaderProgram, vertexShader);
   glAttachShader(debugShaderProgram, debugGeometryShader);
-  glAttachShader(debugShaderProgram, debugFragmentShader);
+  glAttachShader(debugShaderProgram, basicFragmentShader);
 
   glLinkProgram(debugShaderProgram);
 
   logLinkStatus(debugShaderProgram, "(debugShaderProgram) - ");
+
+  GLuint lightSourceProgram{glCreateProgram()};
+  glAttachShader(lightSourceProgram, vertexShader);
+  glAttachShader(lightSourceProgram, basicFragmentShader);
+
+  glLinkProgram(lightSourceProgram);
+
+  logLinkStatus(lightSourceProgram, "(lightSourceProgram) - ");
 
   GLuint floorVertexShader{
       compileShader(GL_VERTEX_SHADER, Shader::Source::vert_floor)};
@@ -698,23 +623,22 @@ int main() {
   glDeleteShader(vertexShader);
   glDeleteShader(fragmentShader);
   glDeleteShader(debugGeometryShader);
-  glDeleteShader(debugFragmentShader);
+  glDeleteShader(basicFragmentShader);
   glDeleteShader(floorFragmentShader);
 
-  /* Shader program variable location */
+  /* UNIFORMS */
 
-  GLint timeLocation{glGetUniformLocation(shaderProgram, "time")};
-  GLint viewLocation{glGetUniformLocation(shaderProgram, "u_view")};
   GLint projectionLocation{glGetUniformLocation(shaderProgram, "u_projection")};
+  GLint viewLocation{glGetUniformLocation(shaderProgram, "u_view")};
   GLint modelLocation{glGetUniformLocation(shaderProgram, "u_model")};
   GLint eyePositionLocation{
       glGetUniformLocation(shaderProgram, "u_eyePosition")};
   GLint lightPositionLocation{
       glGetUniformLocation(shaderProgram, "u_lightPosition")};
 
-  GLint debugViewLocation{glGetUniformLocation(debugShaderProgram, "u_view")};
   GLint debugProjectionLocation{
       glGetUniformLocation(debugShaderProgram, "u_projection")};
+  GLint debugViewLocation{glGetUniformLocation(debugShaderProgram, "u_view")};
   GLint debugModelLocation{glGetUniformLocation(debugShaderProgram, "u_model")};
 
   GLint floorProjectionLocation{
@@ -726,64 +650,12 @@ int main() {
   GLint floorLightPositionLocation{
       glGetUniformLocation(floorProgram, "u_lightPosition")};
 
-  /////////////////////////////////////////////////////////////////////////////
-
-  /* VAO + VBO */
-
-  /*
-    GLuint VAO, VBO;
-
-    glGenVertexArrays(1, &VAO);
-    glGenBuffers(1, &VBO);
-
-    glBindVertexArray(VAO);
-
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER,
-                 vertices.size() * sizeof(float),
-                 vertices.data(),
-                 GL_STATIC_DRAW);
-
-    glVertexAttribPointer(
-      0,
-      2,
-      GL_FLOAT,
-      GL_FALSE,
-      2 * sizeof(float),
-      (void*)0
-    );
-    glEnableVertexAttribArray(0);
-
-    glBindVertexArray(0);
-  */
-
-  /////////////////////////////////////////////////////////////////////////////
-
-  // TODO: Stop thinking in terms of [-1, 1] NDC and use world or model space
-  // coordinates to create models? Quad, create vertices
-  // clang-format off
-  std::vector<float> quad = {-0.8f, -0.8f, 0.8f, -0.8f,
-                             -0.8f, 0.8f,  0.8f, 0.8f};
-  // clang-format on
-
-  // Quad, create vertex array object & vertex buffer object
-  GLuint VAO, VBO;
-
-  glGenVertexArrays(1, &VAO);
-  glGenBuffers(1, &VBO);
-
-  glBindVertexArray(VAO);
-  glBindBuffer(GL_ARRAY_BUFFER, VBO);
-
-  glBufferData(GL_ARRAY_BUFFER, quad.size() * sizeof(float), quad.data(),
-               GL_STATIC_DRAW);
-  // glVertexAttribPointer requires buffer to be bound
-  // so it can asociate interpretation of data with data itself?
-  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void *)0);
-  glEnableVertexAttribArray(0);
-
-  glBindVertexArray(0);
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  GLint lightSourceProjectionLocation{
+      glGetUniformLocation(lightSourceProgram, "u_projection")};
+  GLint lightSourceViewLocation{
+      glGetUniformLocation(lightSourceProgram, "u_view")};
+  GLint lightSourceModelLocation{
+      glGetUniformLocation(lightSourceProgram, "u_model")};
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -834,7 +706,7 @@ int main() {
 
   const int latitudeBands{30};
   const int longitudeBands{30};
-  SphereMesh sphereMesh{generateSphere(latitudeBands, longitudeBands, 8.0f)};
+  MeshData sphereMesh{generateSphere(latitudeBands, longitudeBands, 8.0f)};
 
   SphereBuffers sphereBuffers;
 
@@ -856,8 +728,9 @@ int main() {
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
   glEnableVertexAttribArray(0);
 
-  // Disable attribute 1, so we can feed it value before render call
-  glDisableVertexAttribArray(1);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(1);
 
   glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                         (void *)(6 * sizeof(float)));
@@ -917,6 +790,58 @@ int main() {
 
   /////////////////////////////////////////////////////////////////////////////
 
+  // TODO: Create reusable classes.
+  MeshData lightSourceMesh{
+      generateSphere(20.0f, 20.0f, 1.0f, glm::vec3{1.0f, 1.0f, 0.0f})};
+
+  // I think it would be great if i had a class that handles fragment shader,
+  // buffer creation, accepting and passing down uniforms, using the shader
+  // during rendering, ...
+  struct LightSourceBuffers {
+    GLuint VAO, VBO, EBO;
+  };
+
+  LightSourceBuffers lightSourceBuffers;
+
+  glGenVertexArrays(1, &lightSourceBuffers.VAO);
+  glGenBuffers(1, &lightSourceBuffers.VBO);
+  glGenBuffers(1, &lightSourceBuffers.EBO);
+
+  glBindVertexArray(lightSourceBuffers.VAO);
+
+  glBindBuffer(GL_ARRAY_BUFFER, lightSourceBuffers.VBO);
+  glBufferData(GL_ARRAY_BUFFER,
+               lightSourceMesh.vertices.size() * sizeof(Vertex),
+               lightSourceMesh.vertices.data(), GL_STATIC_DRAW);
+
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lightSourceBuffers.EBO);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+               lightSourceMesh.indices.size() * sizeof(unsigned int),
+               lightSourceMesh.indices.data(), GL_STATIC_DRAW);
+
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
+  glEnableVertexAttribArray(0);
+
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)(3 * sizeof(float)));
+  glEnableVertexAttribArray(1);
+
+  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)(6 * sizeof(float)));
+  glEnableVertexAttribArray(2);
+
+  glBindVertexArray(0);
+
+  // TODO: Render light source object. Make light position movable in the world.
+  // It should help me understand if light is behaving as expected.
+  glm::vec3 lightPosition{0.0f, 20.0f, -10.0f};
+
+  glm::mat4 lightSourceModelMatrix{glm::identity<glm::mat4>()};
+  lightSourceModelMatrix =
+      glm::translate(lightSourceModelMatrix, lightPosition);
+
+  /////////////////////////////////////////////////////////////////////////////
+
   bool running = true;
   SDL_Event event;
 
@@ -943,10 +868,6 @@ int main() {
 
   glm::mat4 sphereModelMatrix{glm::translate(glm::identity<glm::mat4>(),
                                              glm::vec3(0.0f, 8.0f, -25.0f))};
-
-  // TODO: Render light source object. Make light position movable in the world.
-  // It should help me understand if light is behaving as expected.
-  glm::vec3 lightPosition{0.0f, 20.0f, -10.0f};
 
   Uint64 lastTime{SDL_GetTicks()};
   float deltaTime{0.0f};
@@ -1074,35 +995,29 @@ int main() {
     glm::mat4 projectionMatrix{projection(fov, aspectRatio, near, far)};
 
     glUseProgram(shaderProgram);
-    glUniformMatrix4fv(viewLocation, 1, GL_FALSE, glm::value_ptr(viewMatrix));
     glUniformMatrix4fv(projectionLocation, 1, GL_FALSE,
                        glm::value_ptr(projectionMatrix));
+    glUniformMatrix4fv(viewLocation, 1, GL_FALSE, glm::value_ptr(viewMatrix));
     glUniformMatrix4fv(modelLocation, 1, GL_FALSE, glm::value_ptr(modelMatrix));
 
     glUniform3fv(eyePositionLocation, 1, glm::value_ptr(eye));
     glUniform3fv(lightPositionLocation, 1, glm::value_ptr(lightPosition));
-    // glUniform1f(timeLocation, _time);
-    // glBindVertexArray(VAO);
-
-    // glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    // glDrawArrays(GL_LINE_STRIP, 0, vertexCount);
 
     glBindVertexArray(wtf.VAO);
     glDrawElements(GL_TRIANGLES, cubeMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
     glUniformMatrix4fv(modelLocation, 1, GL_FALSE,
                        glm::value_ptr(sphereModelMatrix));
-    // Set constant color
-    glVertexAttrib3f(1, 1.0f, 1.0f, 0.0f);
+
     glBindVertexArray(sphereBuffers.VAO);
     glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
     glUseProgram(debugShaderProgram);
 
-    glUniformMatrix4fv(debugViewLocation, 1, GL_FALSE,
-                       glm::value_ptr(viewMatrix));
     glUniformMatrix4fv(debugProjectionLocation, 1, GL_FALSE,
                        glm::value_ptr(projectionMatrix));
+    glUniformMatrix4fv(debugViewLocation, 1, GL_FALSE,
+                       glm::value_ptr(viewMatrix));
     glUniformMatrix4fv(debugModelLocation, 1, GL_FALSE,
                        glm::value_ptr(sphereModelMatrix));
 
@@ -1110,10 +1025,10 @@ int main() {
 
     glUseProgram(floorProgram);
 
-    glUniformMatrix4fv(floorViewLocation, 1, GL_FALSE,
-                       glm::value_ptr(viewMatrix));
     glUniformMatrix4fv(floorProjectionLocation, 1, GL_FALSE,
                        glm::value_ptr(projectionMatrix));
+    glUniformMatrix4fv(floorViewLocation, 1, GL_FALSE,
+                       glm::value_ptr(viewMatrix));
     glUniformMatrix4fv(floorModelLocation, 1, GL_FALSE,
                        glm::value_ptr(floorModelMatrix));
     glUniform3fv(floorEyePositionLocation, 1, glm::value_ptr(eye));
@@ -1121,6 +1036,19 @@ int main() {
 
     glBindVertexArray(floorBuffers.VAO);
     glDrawElements(GL_TRIANGLES, floorMesh.indices.size(), GL_UNSIGNED_INT, 0);
+
+    glUseProgram(lightSourceProgram);
+
+    glUniformMatrix4fv(lightSourceProjectionLocation, 1, GL_FALSE,
+                       glm::value_ptr(projectionMatrix));
+    glUniformMatrix4fv(lightSourceViewLocation, 1, GL_FALSE,
+                       glm::value_ptr(viewMatrix));
+    glUniformMatrix4fv(lightSourceModelLocation, 1, GL_FALSE,
+                       glm::value_ptr(lightSourceModelMatrix));
+
+    glBindVertexArray(lightSourceBuffers.VAO);
+    glDrawElements(GL_TRIANGLES, lightSourceMesh.indices.size(),
+                   GL_UNSIGNED_INT, 0);
 
     /* ISSUE RENDER DIRECTIVE */
     SDL_GL_SwapWindow(window);
