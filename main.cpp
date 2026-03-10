@@ -784,9 +784,10 @@ int main() {
   glm::mat4 floorModelMatrix{glm::identity<glm::mat4>()};
 
   // TODO: I wonder why is 100 units not enough to cover the whole frustum? The
-  // far variable is 100 units, so...
+  // far variable is 100 units, so... Update: The front of the floor is half of
+  // the full length of the frustum.
   floorModelMatrix =
-      glm::scale(floorModelMatrix, glm::vec3(100.0f, 1.0f, 100.0f));
+      glm::scale(floorModelMatrix, glm::vec3(200.0f, 1.0f, 200.0f));
 
   /////////////////////////////////////////////////////////////////////////////
 
