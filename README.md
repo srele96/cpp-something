@@ -8,6 +8,7 @@
 - Textures
 - Shadow mapping
 - A library of primitives and render more complex shapes (a world)
+- Post-Processing: Bloom effect to the light source
 
 ## Docs
 
