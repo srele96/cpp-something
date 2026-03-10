@@ -875,16 +875,15 @@ int main() {
   const float velocity{10.0f};
 
   // TODO: Add a way to keep multiple cameras. One which has ability to rotated
-  // freely like current one, and another one with constrained pitch.
+  // freely, and another one with constrained pitch.
   // TODO: Consider adding camera not capable of flying around.
-  // TODO: After adding another camera, debug if floor plane still does NOT
-  // follow the camera. (Edit: Nevermind, the plane does move infinitely
-  // alongside the camera.)
   struct Look {
     glm::vec3 forward{0.0f, 0.0f, -1.0f};
     glm::vec3 right{1.0f, 0.0f, 0.0f};
     glm::vec3 up{0.0f, 1.0f, 0.0f};
   };
+
+  glm::vec3 worldUp{0.0f, 1.0f, 0.0f};
 
   Look look;
 
@@ -915,6 +914,13 @@ int main() {
         yaw += deltaYaw;
         pitch -= deltaPitch;
 
+        if (pitch >= 89.0f) {
+          pitch = 89.0f;
+        }
+        if (pitch <= -89.0f) {
+          pitch = -89.0f;
+        }
+
         // NOTE: The forward direction vector is derived by the following linear
         // algebra multiplication, where +x is right, and -z is front:
         // Ry(pitch)*Rx(yaw)*Vec(0,0,-1)
@@ -928,17 +934,18 @@ int main() {
         // TODO: Use static UP world axis. Lock (-pi/2 < pitch < pi/2). Avoid
         // roll effect.
 
-        look.forward =
-            glm::rotate(look.forward, glm::radians(-deltaPitch), look.right);
-        look.up = glm::rotate(look.up, glm::radians(-deltaPitch), look.right);
+        // NOTE: The camera is always orinted relative to static world up, right
+        // and forward vectors. That way we use absolute yaw and pitch instead
+        // of delta values.
+        glm::vec3 forward{0.0f, 0.0f, -1.0f};
+        const glm::vec3 right{1.0f, 0.0f, 0.0f};
 
-        look.forward =
-            glm::rotate(look.forward, glm::radians(-deltaYaw), look.up);
-        look.right = glm::rotate(look.right, glm::radians(-deltaYaw), look.up);
+        forward = glm::rotate(forward, glm::radians(pitch), right);
+        forward = glm::rotate(forward, glm::radians(-yaw), worldUp);
 
-        look.forward = glm::normalize(look.forward);
-        look.right = glm::normalize(look.right);
-        look.up = glm::normalize(look.up);
+        look.forward = glm::normalize(forward);
+        look.right = glm::normalize(glm::cross(look.forward, worldUp));
+        look.up = glm::normalize(glm::cross(look.right, look.forward));
 
         // TODO: Use quaternions because they are superior for 3d rotations and
         // avoid gimbal lock and euler angle flip problems.
@@ -980,7 +987,7 @@ int main() {
     glm::mat4 viewMatrix{
         lookAt(eye,
                // Cancel out the eye vector to form a free look at matrix
-               eye + look.forward, look.up)};
+               eye + look.forward, worldUp)};
 
     // const float _time = SDL_GetTicks() / 500.0f;
 
