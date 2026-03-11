@@ -535,7 +535,8 @@ void logLinkStatus(const GLuint shaderProgram, const std::string &prefix = "") {
 int main() {
   /////////////////////////////////////////////////////////////////////////////
 
-  if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+  /* SDL setup */
+  if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
     return 1;
   }
@@ -562,9 +563,17 @@ int main() {
   // This one line reduces gpu usage from 85% to <=5%
   SDL_GL_SetSwapInterval(1);
 
+  SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_MODE_CENTER, "1");
+
+  if (!SDL_SetWindowRelativeMouseMode(window, true)) {
+    std::cerr << "Relative mouse mode failed: " << SDL_GetError() << "\n";
+  }
+
   if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
     std::cerr << "Failed to initialize GLAD\n";
   }
+
+  /* GL setup */
 
   glEnable(GL_DEPTH_TEST);
 
@@ -659,25 +668,25 @@ int main() {
 
   /////////////////////////////////////////////////////////////////////////////
 
-  struct Wtf {
+  struct CubeBuffers {
     GLuint VAO, VBO, EBO;
   };
 
   MeshData cubeMesh{generateCube(4.0f)};
 
-  Wtf wtf;
+  CubeBuffers cubeBuffers;
 
-  glGenVertexArrays(1, &wtf.VAO);
-  glGenBuffers(1, &wtf.VBO);
-  glGenBuffers(1, &wtf.EBO);
+  glGenVertexArrays(1, &cubeBuffers.VAO);
+  glGenBuffers(1, &cubeBuffers.VBO);
+  glGenBuffers(1, &cubeBuffers.EBO);
 
-  glBindVertexArray(wtf.VAO);
+  glBindVertexArray(cubeBuffers.VAO);
 
-  glBindBuffer(GL_ARRAY_BUFFER, wtf.VBO);
+  glBindBuffer(GL_ARRAY_BUFFER, cubeBuffers.VBO);
   glBufferData(GL_ARRAY_BUFFER, cubeMesh.vertices.size() * sizeof(Vertex),
                cubeMesh.vertices.data(), GL_STATIC_DRAW);
 
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, wtf.EBO);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, cubeBuffers.EBO);
   glBufferData(GL_ELEMENT_ARRAY_BUFFER,
                cubeMesh.indices.size() * sizeof(unsigned int),
                cubeMesh.indices.data(), GL_STATIC_DRAW);
@@ -749,7 +758,6 @@ int main() {
   glGenBuffers(1, &floorBuffers.VBO);
   glGenBuffers(1, &floorBuffers.EBO);
 
-  // All relevant calls refer to this VAO
   glBindVertexArray(floorBuffers.VAO);
 
   MeshData floorMesh{generateQuad()};
@@ -778,7 +786,6 @@ int main() {
                         (void *)(6 * sizeof(float)));
   glEnableVertexAttribArray(2);
 
-  // Clean up currently active VAO
   glBindVertexArray(0);
 
   glm::mat4 floorModelMatrix{glm::identity<glm::mat4>()};
@@ -845,12 +852,6 @@ int main() {
 
   bool running = true;
   SDL_Event event;
-
-  SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_MODE_CENTER, "1");
-
-  if (!SDL_SetWindowRelativeMouseMode(window, true)) {
-    std::cerr << "Relative mouse mode failed: " << SDL_GetError() << "\n";
-  }
 
   float yaw = 0.0f;
   float pitch = 0.0f;
@@ -990,17 +991,16 @@ int main() {
                // Cancel out the eye vector to form a free look at matrix
                eye + look.forward, worldUp)};
 
-    // const float _time = SDL_GetTicks() / 500.0f;
-
-    /* RENDER */
-    glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
     const float fov{glm::radians(60.0f)};
     const float aspectRatio{window_width / window_height};
     const float near{0.1f};
     const float far{100.0f};
     glm::mat4 projectionMatrix{projection(fov, aspectRatio, near, far)};
+
+    /* RENDER */
+
+    glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glUseProgram(shaderProgram);
     glUniformMatrix4fv(projectionLocation, 1, GL_FALSE,
@@ -1011,7 +1011,7 @@ int main() {
     glUniform3fv(eyePositionLocation, 1, glm::value_ptr(eye));
     glUniform3fv(lightPositionLocation, 1, glm::value_ptr(lightPosition));
 
-    glBindVertexArray(wtf.VAO);
+    glBindVertexArray(cubeBuffers.VAO);
     glDrawElements(GL_TRIANGLES, cubeMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
     glUniformMatrix4fv(modelLocation, 1, GL_FALSE,
