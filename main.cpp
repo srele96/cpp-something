@@ -856,7 +856,7 @@ int main() {
   float yaw = 0.0f;
   float pitch = 0.0f;
 
-  glm::vec3 eye{0.0f, 0.0f, 0.0f};
+  glm::vec3 eye{0.0f, 5.0f, 0.0f};
 
   const float sensitivity = 0.05f;
 
