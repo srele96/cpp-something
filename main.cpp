@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -313,6 +314,7 @@ void main() {
 }
 )"};
 
+// TODO: Fix lighting method. Use directional light for the sun illumination.
 const std::string fragmentShaderSource = R"(
 #version 330 core
 out vec4 FragColor;
@@ -996,6 +998,80 @@ int main() {
     const float near{0.1f};
     const float far{100.0f};
     glm::mat4 projectionMatrix{projection(fov, aspectRatio, near, far)};
+
+    {
+      // TODO: Test this block. Currently untested. I don't know how to test it.
+      // TODO: Extract into function.
+      /////////////////////////////////////////////////////////////////////////
+      // Create light source ortographic projection matrix
+      /////////////////////////////////////////////////////////////////////////
+      auto cameraInverse{glm::inverse(projectionMatrix * viewMatrix)};
+      std::vector<glm::vec3> corners;
+
+      // Collect corner points
+      for (float x = 0.0f; x < 2.0f; ++x) {
+        for (float y = 0.0f; y < 2.0f; ++y) {
+          for (float z = 0.0f; z < 2.0f; ++z) {
+            const float xPos{2 * x - 1};
+            const float yPos{2 * y - 1};
+            const float zPos{2 * z - 1};
+
+            glm::vec4 pt{cameraInverse * glm::vec4{xPos, yPos, zPos, 1.0f}};
+            // Todo: Derive mathematically on paper
+            corners.push_back(glm::vec3(pt / pt.w));
+          }
+        }
+      }
+
+      // Find frustum center
+      glm::vec3 center{0.0f};
+
+      // Note: Centroid formula, a center of a mass
+      for (const auto &corner : corners) {
+        center += corner;
+      }
+      center /= corners.size();
+
+      // Find the vector that points to the light source
+      const glm::vec3 lightDirection{glm::normalize(lightPosition - center)};
+
+      // Find the largest enclosing radius as light position distance
+      // Note: This is required to precisely illuminate visible area in the
+      // frustum.
+      float radius{0.0f};
+      for (const auto &corner : corners) {
+        radius = glm::max(radius, glm::length(corner - center));
+      }
+      glm::vec3 position{center + radius * lightDirection};
+
+      // The light position and orientation matrix
+      // TODO: Eventually add a guard, a sun parallel to the world up axis will
+      // break the math.
+      glm::mat4 lightView{glm::lookAt(position, center, worldUp)};
+
+      // Move the frustum corners into light space before creating ortho
+      // projection
+      std::vector<glm::vec3> lightSpaceCorners(corners.size());
+      std::transform(corners.begin(), corners.end(), lightSpaceCorners.begin(),
+                     [&lightView](const glm::vec3 &corner) {
+                       return glm::vec3{lightView * glm::vec4(corner, 1.0f)};
+                     });
+
+      // Get the ortho projection bounds
+      // Note: Intentionally does not include the bounding box adjustment for
+      // object right behind camera to cast the shadows.
+      glm::vec3 minBound{lightSpaceCorners.at(0)};
+      glm::vec3 maxBound{lightSpaceCorners.at(0)};
+      for (const auto &corner : lightSpaceCorners) {
+        minBound = glm::min(minBound, corner);
+        maxBound = glm::max(maxBound, corner);
+      }
+      // Looking down the -z axis, adjust to positive values.
+      const float near{-minBound.z};
+      const float far{-maxBound.z};
+      glm::mat4 lightProjection{glm::ortho(minBound.x, maxBound.x, minBound.y,
+                                           maxBound.y, near, far)};
+    }
 
     /* RENDER */
 
