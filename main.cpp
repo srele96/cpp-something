@@ -4,8 +4,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include "SDL3/SDL.h" // IWYU pragma: keep
@@ -14,7 +12,6 @@
 #include "SDL3/SDL_timer.h"
 #include "SDL3/SDL_video.h"
 #include "glad/glad.h"
-#include "glm/ext/matrix_clip_space.hpp"
 #include "glm/ext/matrix_transform.hpp"
 #include "glm/ext/scalar_constants.hpp"
 #include "glm/gtc/type_ptr.hpp"
@@ -180,6 +177,38 @@ MeshData generateQuad() {
   return quad;
 }
 
+glm::mat4 lookAt(const glm::vec3 &eye, const glm::vec3 &center,
+                 const glm::vec3 &worldUp) {
+  // Note: For learning purposes. I know glm::lookAt exists, but i derived math
+  // and left this function implementation here as an example & reminder.
+  const glm::vec3 forward{glm::normalize(center - eye)};
+  const glm::vec3 right{glm::normalize(glm::cross(forward, worldUp))};
+  const glm::vec3 up{glm::normalize(glm::cross(right, forward))};
+
+  glm::mat4 view{right.x,          up.x,          -forward.x,        0.0f,
+                 right.y,          up.y,          -forward.y,        0.0f,
+                 right.z,          up.z,          -forward.z,        0.0f,
+                 -dot(right, eye), -dot(up, eye), dot(forward, eye), 1};
+
+  return view;
+}
+
+glm::mat4 projection(const float fov, const float aspectRatio, const float near,
+                     const float far) {
+  // Note: For learning purposes. I know glm::lookAt exists, but i derived math
+  // and left this function implementation here as an example & reminder.
+  const float f{1 / glm::tan(fov / 2)};
+
+  // clang-format off
+  glm::mat4 mat{f/aspectRatio, 0.0f, 0.0f,                               0.0f,
+                0.0f,          f,    0.0f,                               0.0f,
+                0.0f,          0.0f, -(far + near)/(far - near),         -1.0f,
+                0.0f,          0.0f, -(2 * far * near)/(far - near),     0.0f};
+  // clang-format on
+
+  return mat;
+}
+
 std::string loadShaderSource(const std::string &filePath) {
   std::ifstream file(filePath);
   if (!file.is_open()) {
@@ -190,106 +219,6 @@ std::string loadShaderSource(const std::string &filePath) {
   return buffer.str();
 }
 
-class AbstractShader {
-public:
-  virtual ~AbstractShader() = default;
-  virtual AbstractShader &replace(const std::string &, const std::string &) = 0;
-};
-
-class Shader final : public AbstractShader {
-private:
-  std::string m_src;
-
-public:
-  Shader(std::string src,
-         const std::unordered_map<std::string, std::string> &replacements = {})
-      : m_src{std::move(src)} {
-    for (const auto &[key, value] : replacements) {
-      this->replace(key, value);
-    }
-  }
-  Shader &replace(const std::string &key, const std::string &value) override {
-    const std::string searchKey{"{{" + key + "}}"};
-    size_t pos{0};
-    while ((pos = m_src.find(searchKey, pos)) != std::string::npos) {
-      m_src.replace(pos, searchKey.length(), value);
-      pos += value.length();
-    }
-    return *this;
-  }
-  std::string src() const { return m_src; }
-};
-
-const std::string computeShadow{R"(
-float computeShadow(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir, sampler2DShadow shadowMap) {
-  vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
-
-  // Normalize to [0, 1]
-  projCoords = projCoords * 0.5 + 0.5;
-
-  float currentDepth = projCoords.z;
-
-  // https://learnopengl.com/Advanced-Lighting/Shadows/Shadow-Mapping
-  float bias = max(0.05 * (1.0 - dot(normal, lightDir)), 0.005);
-
-  float shadow = 0.0;
-
-  vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
-
-  for(int x = -1; x <= 1; ++x) {
-    for(int y = -1; y <= 1; ++y) {
-      // The z-component is the reference depth to compare against
-      vec3 UVC = vec3(projCoords.xy + vec2(x, y) * texelSize, currentDepth - bias);
-
-      // This returns a smoothly interpolated value between 0.0 and 1.0 automatically
-      shadow += texture(shadowMap, UVC); 
-    }    
-  }
-
-  // Average out the shadow for this pixel
-  shadow /= 9.0;
-
-  return shadow;
-}
-)"};
-
-const std::string computeColor{R"(
-// -----------------------
-// Phong & Lambert shading
-
-vec3 computeAmbient(vec3 lightColor) {
-  float ambientStrength = 0.15;
-  vec3 ambient = ambientStrength * lightColor;
-
-  return ambient;
-}
-
-vec3 computeDiffuse(vec3 lightColor, vec3 lightDirection, vec3 normal) {
-  float diffuseIntensity = max(dot(lightDirection, normal), 0.0);
-  vec3 diffuse = diffuseIntensity * lightColor;
-
-  return diffuse;
-}
-
-vec3 computeSpecular(vec3 lightColor, vec3 eyeDirection, vec3 lightReflection) {
-  float specularStrength = 0.2;
-  float specularIntensity = pow(max(dot(eyeDirection, lightReflection), 0.0), 128);
-  vec3 specular = specularStrength * specularIntensity * lightColor;
-
-  return specular;
-}
-
-struct LightingComponent {
-  vec3 ambient;
-  vec3 diffuse;
-  vec3 specular;
-};
-
-vec3 computeFragColor(LightingComponent light, vec3 baseColor, float shadow) {
-  return baseColor * (light.ambient + shadow * (light.diffuse + light.specular));
-}
-)"};
-
 const std::string vertexShaderSource = R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
@@ -299,7 +228,6 @@ layout (location = 2) in vec3 aNormal;
 out vec3 vColor;
 out vec3 vNormal;
 out vec3 vFragPos;
-out vec4 vFragPosLightSpace;
 
 // Does it matter if we output this and we don't have geometry shader in the next stage?
 // Do we have to match VS_OUT and vs_out to be exactly same with different casing?
@@ -312,8 +240,6 @@ out VS_OUT {
 uniform mat4 u_view;
 uniform mat4 u_projection;
 uniform mat4 u_model;
-uniform mat4 u_lightProjection;
-uniform mat4 u_lightView;
 
 void main() {
   vec4 worldPosition = u_model * vec4(aPos, 1.0);
@@ -328,7 +254,6 @@ void main() {
   // Rotate and move normal with the vertex, but prevent scaling from messing
   // up the normals perpendicularity.
   vNormal = mat3(transpose(inverse(u_model))) * aNormal;
-  vFragPosLightSpace = u_lightProjection * u_lightView * worldPosition;
 
   vs_out.worldPos = worldPosition.xyz;
   // Keep the outputs to keep the compatibility with fragment shader.
@@ -389,52 +314,80 @@ void main() {
 }
 )"};
 
-const Shader fragmentShaderSource{
-    R"(
+// TODO: Fix lighting method. Use directional light for the sun illumination.
+const std::string fragmentShaderSource = R"(
 #version 330 core
+out vec4 FragColor;
 
 in vec3 vColor;
 in vec3 vNormal;
 in vec3 vFragPos;
-in vec4 vFragPosLightSpace;
-
-out vec4 FragColor;
 
 uniform vec3 u_eyePosition;
 uniform vec3 u_lightPosition;
-uniform sampler2DShadow u_shadowMap;
-
-{{computeShadow}}
-
-{{computeColor}}
 
 void main() {
-  vec3 normal = normalize(vNormal);
+  /////////////////////////////////////////////////////////////////////////////
+  // TODO: Write a more elaborate explanation in graphics-docs repo.
+  //
+  // NOTE:
+  //
+  // In order to get the lighting computation correctly, we MUST understand the
+  // concept of spaces.
+  //
+  // - MODEL SPACE
+  // - WORLD SPACE
+  // - CAMERA SPACE
+  // - CLIP SPACE
+  //
+  // The model space lives after model has been modified by the model matrix.
+  // The model matrix moves the model from model space to the world space.
+  // Every object lives in a world space. Imagine 4d being observing a 3d
+  // world, everything seen AS IS is a world space. Hence, for the CURRENT
+  // light computation, we want every object to live in the world space.
+  /////////////////////////////////////////////////////////////////////////////
+
+  // TODO: Find a way to reuse logic in shaders. I have duplicate shading
+  // computation.
+
+  // -----------------------------------
+  // Phong & Lambert shading -- BEGIN --
 
   vec3 lightColor = vec3(1.0, 0.98, 0.9);
 
+  // AMBIENT
+  float ambientStrength = 0.15;
+  vec3 ambient = ambientStrength * lightColor;
+
+  // We must normalize it because interpolation might break normals.
+  vec3 normal = normalize(vNormal);
+
   vec3 lightDirection = normalize(u_lightPosition - vFragPos);
-  vec3 lightReflection = reflect(-lightDirection, normal);
+
+  // DIFFUSE
+  float diff = max(dot(normal, lightDirection), 0.0);
+  vec3 diffuse = diff * lightColor;
+
+  // SPECULAR
   vec3 eyeDirection = normalize(u_eyePosition - vFragPos);
+  vec3 reflectionDirection = reflect(-lightDirection, normal);
 
-  LightingComponent lightComponent;
-  lightComponent.ambient = computeAmbient(lightColor);
-  lightComponent.diffuse = computeDiffuse(lightColor, lightDirection, normal);
-  lightComponent.specular = computeSpecular(lightColor, eyeDirection, lightReflection);
+  float specularStrength = 0.5;
+  float spec = pow(max(dot(eyeDirection, reflectionDirection), 0.0), 128);
+  vec3 specular = specularStrength * spec * lightColor;
 
-  float shadow = computeShadow(vFragPosLightSpace, normal, lightDirection, u_shadowMap);
+  // Phong & Lambert shading -- END --
+  // ---------------------------------
 
-  vec3 fragmentColor = computeFragColor(lightComponent, vColor, shadow);
+  vec3 fragmentColor = (ambient + diffuse) * vColor + specular;
 
   FragColor = vec4(fragmentColor, 1.0);
 }
-)",
-    {{"computeColor", computeColor}, //
-     {"computeShadow", computeShadow}}};
+)";
 
-namespace ShaderSource {
+namespace Shader::Source {
 
-const Shader vertFloor{R"(
+const std::string vert_floor{R"(
 #version 330 core
 
 layout (location = 0) in vec3 aPos;
@@ -444,52 +397,78 @@ layout (location = 2) in vec3 aNormal;
 out vec3 vColor;
 out vec3 vFragPos;
 out vec3 vNormal;
-out vec4 vFragPosLightSpace;
 
 uniform mat4 u_view;
 uniform mat4 u_projection;
 uniform mat4 u_model;
-uniform mat4 u_lightProjection;
-uniform mat4 u_lightView;
+uniform vec3 u_eyePosition;
 
 void main() {
   vec4 worldPosition = u_model * vec4(aPos, 1.0);
 
-  gl_Position = u_projection * u_view * worldPosition;
+  vec3 anchored = worldPosition.xyz;
+  anchored.x += u_eyePosition.x;
+  anchored.z += u_eyePosition.z;
+  anchored.y = worldPosition.y;
 
-  vFragPos = vec3(worldPosition.xyz);
+  vFragPos = anchored;
+
+  gl_Position = u_projection * u_view * vec4(anchored, 1.0);
+
   vColor = aColor;
   vNormal = mat3(transpose(inverse(u_model))) * aNormal;
-  vFragPosLightSpace = u_lightProjection * u_lightView * worldPosition;
 }
 )"};
 
-// TODO: Change computing light direction to accepting uniform light direction.
-// Global illumination is a directional light, not a point light or spotlight.
-// Global light rays do not have a position, only a direction.
+// TODO: Depth perspective. Objects in the scene do not block the light. Idea:
+// Two-Pass process. The shadow pass. The lighting pass. The shadow mapping?
 
-const Shader fragFloor{
-    R"(
+const std::string frag_floor{R"(
 #version 330 core
 
 in vec3 vColor;
 in vec3 vFragPos;
 in vec3 vNormal;
-in vec4 vFragPosLightSpace;
 
 out vec4 FragColor;
 
 uniform vec3 u_eyePosition;
 uniform vec3 u_lightPosition;
-uniform sampler2DShadow u_shadowMap;
 
-{{computeShadow}}
+void main() {
+  // -----------------------------------
+  // Phong & Lambert shading -- BEGIN --
 
-{{computeColor}}
+  // One gotcha: The specular intensity is still calculated for the vieweing
+  // side, even if the light is on the oposite side.
 
-vec3 computeChecker(vec3 fragPos) {
+  vec3 normal = normalize(vNormal);
+
+  vec3 lightColor = vec3(1.0, 0.98, 0.9);
+
+  // Ambient
+  float ambientStrength = 0.15;
+  vec3 ambientColor = ambientStrength * lightColor;
+
+  vec3 lightDirection = normalize(u_lightPosition - vFragPos);
+
+  // Diffuse
+  float diffuseIntensity = max(dot(lightDirection, normal), 0.0);
+  vec3 diffuseColor = diffuseIntensity * lightColor;
+
+  // Specular
+  vec3 lightReflection = reflect(-lightDirection, normal);
+  vec3 eyeDirection = normalize(u_eyePosition - vFragPos);
+
+  float specularStrength = 0.2;
+  float specularIntensity = pow(max(dot(eyeDirection, lightReflection), 0.0), 128);
+  vec3 specularColor = specularStrength * specularIntensity * lightColor;
+
+  // Phong & Lambert shading -- END --
+  // ---------------------------------
+
   // Make each checker sides 1 unit long
-  vec2 pos = fragPos.xz * 0.5;
+  vec2 pos = vFragPos.xz * 0.5;
 
   vec2 f = fract(pos);
 
@@ -500,38 +479,17 @@ vec3 computeChecker(vec3 fragPos) {
   // XOR
   float checker = abs(sX - sY);
 
-  return vec3(checker);
-}
+  vec3 checkerColor = vec3(checker);
 
-void main() {
-  vec3 normal = normalize(vNormal);
-
-  vec3 lightColor = vec3(1.0, 0.98, 0.9);
-
-  vec3 lightDirection = normalize(u_lightPosition - vFragPos);
-  vec3 lightReflection = reflect(-lightDirection, normal);
-  vec3 eyeDirection = normalize(u_eyePosition - vFragPos);
-
-  LightingComponent lightComponent;
-  lightComponent.ambient = computeAmbient(lightColor);
-  lightComponent.diffuse = computeDiffuse(lightColor, lightDirection, normal);
-  lightComponent.specular = computeSpecular(lightColor, eyeDirection, lightReflection);
-
-  vec3 checkerColor = computeChecker(vFragPos);
-
-  float shadow = computeShadow(vFragPosLightSpace, normal, lightDirection, u_shadowMap);
-
-  vec3 fragmentColor = computeFragColor(lightComponent, checkerColor, shadow);
+  vec3 fragmentColor = (ambientColor + diffuseColor) * checkerColor + specularColor;
 
   // TODO: Try out the fade factor, the further the checkerboard fragment is
   // from the eye, the more it is faded out
   FragColor = vec4(fragmentColor, 1.0);
 }
-)",
-    {{"computeShadow", computeShadow}, //
-     {"computeColor", computeColor}}};
+)"};
 
-} // namespace ShaderSource
+} // namespace Shader::Source
 
 // TODO: Render a plane and use calculus to make it more interesting. Procedural
 // terrain generation?
@@ -539,6 +497,8 @@ void main() {
 // TODO: Render a pipe in a sinus & cosinus shape. Remove the dead code which
 // used to render sinus wave.
 
+// TODO: Maybe allow usage of #define in shader source? But that doesnt seem to
+// be opengl feature but rather wittiness of c++ developers.
 GLuint compileShader(GLenum type, const std::string &source) {
   GLuint shader = glCreateShader(type);
 
@@ -557,148 +517,7 @@ GLuint compileShader(GLenum type, const std::string &source) {
   return shader;
 }
 
-void logLinkStatus(const GLuint shaderProgram, const std::string &prefix = "");
-
-namespace ShadowMapping {
-
-const std::string vert{R"(
-#version 330 core
-
-layout (location = 0) in vec3 aPos;
-
-uniform mat4 u_projection;
-uniform mat4 u_view;
-uniform mat4 u_model;
-
-void main() {
-  gl_Position = u_projection * u_view * u_model * vec4(aPos, 1.0);
-}
-)"};
-
-GLuint createProgram() {
-  GLuint depthProgram{glCreateProgram()};
-  GLuint depthVertexShader{compileShader(GL_VERTEX_SHADER, vert)};
-  glAttachShader(depthProgram, depthVertexShader);
-  glLinkProgram(depthProgram);
-  logLinkStatus(depthProgram, "(depthProgram) - ");
-  glDeleteShader(depthVertexShader);
-
-  return depthProgram;
-}
-
-struct DepthProgram {
-  GLuint program;
-  GLint projectionLocation;
-  GLint viewLocation;
-  GLint modelLocation;
-};
-
-DepthProgram createDepthProgram() {
-  DepthProgram depthProgram{.program = createProgram()};
-
-  depthProgram.projectionLocation =
-      glGetUniformLocation(depthProgram.program, "u_projection");
-  depthProgram.viewLocation =
-      glGetUniformLocation(depthProgram.program, "u_view");
-  depthProgram.modelLocation =
-      glGetUniformLocation(depthProgram.program, "u_model");
-
-  return depthProgram;
-}
-
-struct LightMatrix {
-  glm::mat4 view;
-  glm::mat4 projection;
-};
-
-struct CreateLightMatrixParam {
-  glm::mat4 projectionMatrix;
-  glm::mat4 viewMatrix;
-  glm::vec3 worldUp;
-  glm::vec3 lightDirection;
-};
-
-LightMatrix createLightMatrix(const CreateLightMatrixParam &param) {
-  const auto &projectionMatrix{param.projectionMatrix};
-  const auto &viewMatrix{param.viewMatrix};
-  const auto &worldUp{param.worldUp};
-  const auto &lightDirection{param.lightDirection};
-
-  if (glm::abs(glm::dot(lightDirection, worldUp)) >= 0.9999f) {
-    throw std::runtime_error(
-        "Light direction and world up must not be parallel.");
-  }
-
-  auto cameraInverse{glm::inverse(projectionMatrix * viewMatrix)};
-  std::vector<glm::vec3> corners;
-
-  // Collect corner points
-  for (float x = 0.0f; x < 2.0f; ++x) {
-    for (float y = 0.0f; y < 2.0f; ++y) {
-      for (float z = 0.0f; z < 2.0f; ++z) {
-        const float xPos{2 * x - 1};
-        const float yPos{2 * y - 1};
-        const float zPos{2 * z - 1};
-
-        glm::vec4 pt{cameraInverse * glm::vec4{xPos, yPos, zPos, 1.0f}};
-        // Todo: Derive mathematically on paper
-        corners.push_back(glm::vec3(pt / pt.w));
-      }
-    }
-  }
-
-  // Find frustum center
-  glm::vec3 center{0.0f};
-  // Note: Centroid formula, a center of a mass
-  for (const auto &corner : corners) {
-    center += corner;
-  }
-  center /= corners.size();
-
-  // Find the largest enclosing radius as light position distance
-  // Note: This is required to precisely illuminate visible area in the
-  // frustum.
-  float radius{0.0f};
-  for (const auto &corner : corners) {
-    radius = glm::max(radius, glm::length(corner - center));
-  }
-  glm::vec3 position{center - radius * lightDirection};
-
-  // The light position and orientation matrix
-  glm::mat4 lightView{glm::lookAt(position, center, worldUp)};
-
-  // Move the frustum corners into light space before creating ortho
-  // projection
-  std::vector<glm::vec3> lightSpaceCorners(corners.size());
-  std::transform(corners.begin(), corners.end(), lightSpaceCorners.begin(),
-                 [&lightView](const glm::vec3 &corner) {
-                   return glm::vec3{lightView * glm::vec4(corner, 1.0f)};
-                 });
-
-  // Get the ortho projection bounds
-  // Note: If shadows jitter due to subpixel changes in minBound & maxBound, try
-  // using spherical bounding box.
-  // Note: Intentionally does not include the bounding box adjustment for
-  // object right behind camera to cast the shadows.
-  // Collect minimum and maximum component-wise bounds.
-  glm::vec3 minBound{lightSpaceCorners.at(0)};
-  glm::vec3 maxBound{lightSpaceCorners.at(0)};
-  for (const auto &corner : lightSpaceCorners) {
-    minBound = glm::min(minBound, corner);
-    maxBound = glm::max(maxBound, corner);
-  }
-  // Looking down the -z axis, adjust to positive values.
-  const float near{-maxBound.z};
-  const float far{-minBound.z};
-
-  glm::mat4 lightProjection{
-      glm::ortho(minBound.x, maxBound.x, minBound.y, maxBound.y, near, far)};
-
-  return {.view = lightView, .projection = lightProjection};
-}
-} // namespace ShadowMapping
-
-void logLinkStatus(const GLuint shaderProgram, const std::string &prefix) {
+void logLinkStatus(const GLuint shaderProgram, const std::string &prefix = "") {
   GLint success;
 
   glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
@@ -768,7 +587,7 @@ int main() {
 
   GLuint vertexShader = compileShader(GL_VERTEX_SHADER, vertexShaderSource);
   GLuint fragmentShader =
-      compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource.src());
+      compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource);
 
   GLuint shaderProgram = glCreateProgram();
   glAttachShader(shaderProgram, vertexShader);
@@ -800,9 +619,9 @@ int main() {
   logLinkStatus(lightSourceProgram, "(lightSourceProgram) - ");
 
   GLuint floorVertexShader{
-      compileShader(GL_VERTEX_SHADER, ShaderSource::vertFloor.src())};
+      compileShader(GL_VERTEX_SHADER, Shader::Source::vert_floor)};
   GLuint floorFragmentShader{
-      compileShader(GL_FRAGMENT_SHADER, ShaderSource::fragFloor.src())};
+      compileShader(GL_FRAGMENT_SHADER, Shader::Source::frag_floor)};
 
   GLuint floorProgram{glCreateProgram()};
   glAttachShader(floorProgram, floorVertexShader);
@@ -820,10 +639,6 @@ int main() {
 
   /* UNIFORMS */
 
-  // TODO: Automate uniform location retrieval and throw if an uniform location
-  // does not have a set value. It's repetitive and difficult to manually find a
-  // shader program that matches modified shader source, find the uniform
-  // location, and pass the value to it.
   GLint projectionLocation{glGetUniformLocation(shaderProgram, "u_projection")};
   GLint viewLocation{glGetUniformLocation(shaderProgram, "u_view")};
   GLint modelLocation{glGetUniformLocation(shaderProgram, "u_model")};
@@ -831,16 +646,11 @@ int main() {
       glGetUniformLocation(shaderProgram, "u_eyePosition")};
   GLint lightPositionLocation{
       glGetUniformLocation(shaderProgram, "u_lightPosition")};
-  GLint lightProjectionLocation{
-      glGetUniformLocation(shaderProgram, "u_lightProjection")};
-  GLint lightViewLocation{glGetUniformLocation(shaderProgram, "u_lightView")};
-  GLint shadowMapLocation{glGetUniformLocation(shaderProgram, "u_shadowMap")};
 
   GLint debugProjectionLocation{
       glGetUniformLocation(debugShaderProgram, "u_projection")};
   GLint debugViewLocation{glGetUniformLocation(debugShaderProgram, "u_view")};
   GLint debugModelLocation{glGetUniformLocation(debugShaderProgram, "u_model")};
-  // here: u_lightProjection, u_lightView, u_shadowMap
 
   GLint floorProjectionLocation{
       glGetUniformLocation(floorProgram, "u_projection")};
@@ -851,20 +661,12 @@ int main() {
   GLint floorLightPositionLocation{
       glGetUniformLocation(floorProgram, "u_lightPosition")};
 
-  GLint floorLightProjectionLocation{
-      glGetUniformLocation(floorProgram, "u_lightProjection")};
-  GLint floorLightViewLocation{
-      glGetUniformLocation(floorProgram, "u_lightView")};
-  GLint floorShadowMapLocation{
-      glGetUniformLocation(floorProgram, "u_shadowMap")};
-
   GLint lightSourceProjectionLocation{
       glGetUniformLocation(lightSourceProgram, "u_projection")};
   GLint lightSourceViewLocation{
       glGetUniformLocation(lightSourceProgram, "u_view")};
   GLint lightSourceModelLocation{
       glGetUniformLocation(lightSourceProgram, "u_model")};
-  // here: u_lightProjection, u_lightView, u_shadowMap
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -1042,82 +844,11 @@ int main() {
 
   // TODO: Render light source object. Make light position movable in the world.
   // It should help me understand if light is behaving as expected.
-  glm::vec3 lightPosition{0.0f, 40.0f, -10.0f};
+  glm::vec3 lightPosition{0.0f, 20.0f, -10.0f};
 
   glm::mat4 lightSourceModelMatrix{glm::identity<glm::mat4>()};
   lightSourceModelMatrix =
       glm::translate(lightSourceModelMatrix, lightPosition);
-
-  /////////////////////////////////////////////////////////////////////////////
-
-  struct DepthMap {
-    GLuint framebuffer;
-    GLuint texture;
-    const unsigned int TEXTURE_WIDTH{2048};
-    const unsigned int TEXTURE_HEIGHT{2048};
-    const std::array<float, 4> borderColor{1.0f, 1.0f, 1.0f, 1.0f};
-  };
-
-  // Create framebuffer
-  DepthMap depthMap;
-  glGenFramebuffers(1, &depthMap.framebuffer);
-  glGenTextures(1, &depthMap.texture);
-
-  // Start describing the texture
-  glBindTexture(GL_TEXTURE_2D, depthMap.texture);
-
-  // Store depth component in the texture, and tell graphics driver to give us
-  // higher precision shadows
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, depthMap.TEXTURE_WIDTH,
-               depthMap.TEXTURE_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
-
-  // -- BEGIN -- Required texture parameters for smooth shadow (anti aliasing)
-  // https://wikis.khronos.org/opengl/Texture
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE,
-                  GL_COMPARE_REF_TO_TEXTURE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-  // -- END -- Required texture parameters for smooth shadow (anti aliasing)
-
-  // A value thats far out gets border color assigned
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-
-  // A border color value means a light ray hit it and should be lit
-  glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR,
-                   depthMap.borderColor.data());
-
-  // Stop describing the texture
-  // Should be safe to unbind texture?
-  glBindTexture(GL_TEXTURE_2D, 0);
-
-  // Start describing the framebuffer
-  glBindFramebuffer(GL_FRAMEBUFFER, depthMap.framebuffer);
-
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
-                         depthMap.texture, 0);
-
-  glDrawBuffer(GL_NONE);
-  glReadBuffer(GL_NONE);
-
-  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
-    std::cout << "Framebuffer is complete." << std::endl;
-  } else {
-    std::cout << "Framebuffer not complete!" << std::endl;
-  }
-
-  // Stop describing the framebuffer
-  glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-  ShadowMapping::DepthProgram depthProgram{ShadowMapping::createDepthProgram()};
-
-  /////////////////////////////////////////////////////////////////////////////
-
-  // TODO: Textures
-  // TODO: UV Coordinates
-  // TODO: Filtering: MIN_FILTER | MAG_FILTER - GL_NEAREST | GL_LINEAR
-  // TODO: Wrapping
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -1172,7 +903,8 @@ int main() {
       }
       if (event.type == SDL_EVENT_MOUSE_MOTION) {
         // TODO: Mathematically check when do the two axes collapse and cause an
-        // euler angle flip.
+        // euler angle flip. Is this a gimbal lock? (Edit: No, it's not a gimbal
+        // lock, but is known phenomenon) Check visually too, etc...
 
         // TODO: Ues recommended way to extract mouse movement coordinates.
         // SDL_GetMouseState
@@ -1218,6 +950,9 @@ int main() {
         look.forward = glm::normalize(forward);
         look.right = glm::normalize(glm::cross(look.forward, worldUp));
         look.up = glm::normalize(glm::cross(look.right, look.forward));
+
+        // TODO: Use quaternions because they are superior for 3d rotations and
+        // avoid gimbal lock and euler angle flip problems.
       }
     }
 
@@ -1254,90 +989,103 @@ int main() {
     }
 
     glm::mat4 viewMatrix{
-        glm::lookAt(eye,
-                    // Cancel out the eye vector to form a free look at matrix
-                    eye + look.forward, worldUp)};
+        lookAt(eye,
+               // Cancel out the eye vector to form a free look at matrix
+               eye + look.forward, worldUp)};
 
     const float fov{glm::radians(60.0f)};
     const float aspectRatio{window_width / window_height};
     const float near{0.1f};
     const float far{100.0f};
-    glm::mat4 projectionMatrix{glm::perspective(fov, aspectRatio, near, far)};
+    glm::mat4 projectionMatrix{projection(fov, aspectRatio, near, far)};
 
-    const glm::vec3 lightDirection{glm::normalize(
-        glm::rotate(glm::vec3{0.0f, -1.0f, 0.0f}, -glm::pi<float>() / 6.0f,
-                    glm::vec3{1.0f, 0.0f, 0.0f}))};
+    {
+      // TODO: Test this block. Currently untested. I don't know how to test it.
+      // TODO: Extract into function.
+      /////////////////////////////////////////////////////////////////////////
+      // Create light source ortographic projection matrix
+      /////////////////////////////////////////////////////////////////////////
+      auto cameraInverse{glm::inverse(projectionMatrix * viewMatrix)};
+      std::vector<glm::vec3> corners;
 
-    const auto lightMatrix{
-        ShadowMapping::createLightMatrix({.projectionMatrix = projectionMatrix,
-                                          .viewMatrix = viewMatrix,
-                                          .worldUp = worldUp,
-                                          .lightDirection = lightDirection})};
+      // Collect corner points
+      for (float x = 0.0f; x < 2.0f; ++x) {
+        for (float y = 0.0f; y < 2.0f; ++y) {
+          for (float z = 0.0f; z < 2.0f; ++z) {
+            const float xPos{2 * x - 1};
+            const float yPos{2 * y - 1};
+            const float zPos{2 * z - 1};
 
-    /* SHADOW PASS */
+            glm::vec4 pt{cameraInverse * glm::vec4{xPos, yPos, zPos, 1.0f}};
+            // Todo: Derive mathematically on paper
+            corners.push_back(glm::vec3(pt / pt.w));
+          }
+        }
+      }
 
-    glViewport(0, 0, depthMap.TEXTURE_WIDTH, depthMap.TEXTURE_HEIGHT);
+      // Find frustum center
+      glm::vec3 center{0.0f};
 
-    // Use depth framebuffer for this render pass
-    glBindFramebuffer(GL_FRAMEBUFFER, depthMap.framebuffer);
+      // Note: Centroid formula, a center of a mass
+      for (const auto &corner : corners) {
+        center += corner;
+      }
+      center /= corners.size();
 
-    glClear(GL_DEPTH_BUFFER_BIT);
+      // Find the vector that points to the light source
+      const glm::vec3 lightDirection{glm::normalize(lightPosition - center)};
 
-    // Fix shadow acne
-    glCullFace(GL_FRONT);
+      // Find the largest enclosing radius as light position distance
+      // Note: This is required to precisely illuminate visible area in the
+      // frustum.
+      float radius{0.0f};
+      for (const auto &corner : corners) {
+        radius = glm::max(radius, glm::length(corner - center));
+      }
+      glm::vec3 position{center + radius * lightDirection};
 
-    glUseProgram(depthProgram.program);
+      // The light position and orientation matrix
+      // TODO: Eventually add a guard, a sun parallel to the world up axis will
+      // break the math.
+      glm::mat4 lightView{glm::lookAt(position, center, worldUp)};
 
-    glUniformMatrix4fv(depthProgram.projectionLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.projection));
-    glUniformMatrix4fv(depthProgram.viewLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.view));
+      // Move the frustum corners into light space before creating ortho
+      // projection
+      std::vector<glm::vec3> lightSpaceCorners(corners.size());
+      std::transform(corners.begin(), corners.end(), lightSpaceCorners.begin(),
+                     [&lightView](const glm::vec3 &corner) {
+                       return glm::vec3{lightView * glm::vec4(corner, 1.0f)};
+                     });
 
-    glUniformMatrix4fv(depthProgram.modelLocation, 1, GL_FALSE,
-                       glm::value_ptr(modelMatrix));
+      // Get the ortho projection bounds
+      // Note: Intentionally does not include the bounding box adjustment for
+      // object right behind camera to cast the shadows.
+      glm::vec3 minBound{lightSpaceCorners.at(0)};
+      glm::vec3 maxBound{lightSpaceCorners.at(0)};
+      for (const auto &corner : lightSpaceCorners) {
+        minBound = glm::min(minBound, corner);
+        maxBound = glm::max(maxBound, corner);
+      }
+      // Looking down the -z axis, adjust to positive values.
+      const float near{-minBound.z};
+      const float far{-maxBound.z};
+      glm::mat4 lightProjection{glm::ortho(minBound.x, maxBound.x, minBound.y,
+                                           maxBound.y, near, far)};
+    }
 
-    glBindVertexArray(cubeBuffers.VAO);
-    glDrawElements(GL_TRIANGLES, cubeMesh.indices.size(), GL_UNSIGNED_INT, 0);
-
-    glUniformMatrix4fv(depthProgram.modelLocation, 1, GL_FALSE,
-                       glm::value_ptr(sphereModelMatrix));
-
-    glBindVertexArray(sphereBuffers.VAO);
-    glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
-
-    // Revert culling to normal one
-    glCullFace(GL_BACK);
-
-    // Unbind depth framebuffer, the render pass is done
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    /* LIGHT PASS */
-
-    glViewport(0, 0, window_width, window_height);
+    /* RENDER */
 
     glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, depthMap.texture);
 
     glUseProgram(shaderProgram);
     glUniformMatrix4fv(projectionLocation, 1, GL_FALSE,
                        glm::value_ptr(projectionMatrix));
     glUniformMatrix4fv(viewLocation, 1, GL_FALSE, glm::value_ptr(viewMatrix));
+    glUniformMatrix4fv(modelLocation, 1, GL_FALSE, glm::value_ptr(modelMatrix));
 
     glUniform3fv(eyePositionLocation, 1, glm::value_ptr(eye));
     glUniform3fv(lightPositionLocation, 1, glm::value_ptr(lightPosition));
-
-    glUniformMatrix4fv(lightProjectionLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.projection));
-    glUniformMatrix4fv(lightViewLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.view));
-
-    // Texture unit 0 is reserved for color/diffuse
-    glUniform1i(shadowMapLocation, 1);
-
-    glUniformMatrix4fv(modelLocation, 1, GL_FALSE, glm::value_ptr(modelMatrix));
 
     glBindVertexArray(cubeBuffers.VAO);
     glDrawElements(GL_TRIANGLES, cubeMesh.indices.size(), GL_UNSIGNED_INT, 0);
@@ -1370,14 +1118,6 @@ int main() {
     glUniform3fv(floorEyePositionLocation, 1, glm::value_ptr(eye));
     glUniform3fv(floorLightPositionLocation, 1, glm::value_ptr(lightPosition));
 
-    glUniformMatrix4fv(floorLightProjectionLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.projection));
-    glUniformMatrix4fv(floorLightViewLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.view));
-
-    // Texture unit 0 is reserved for color/diffuse
-    glUniform1i(floorShadowMapLocation, 1);
-
     glBindVertexArray(floorBuffers.VAO);
     glDrawElements(GL_TRIANGLES, floorMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
@@ -1393,11 +1133,6 @@ int main() {
     glBindVertexArray(lightSourceBuffers.VAO);
     glDrawElements(GL_TRIANGLES, lightSourceMesh.indices.size(),
                    GL_UNSIGNED_INT, 0);
-
-    // Unbind texture and program
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glUseProgram(0);
 
     /* ISSUE RENDER DIRECTIVE */
     SDL_GL_SwapWindow(window);
