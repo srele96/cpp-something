@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <fstream>
+#include <functional>
+#include <initializer_list>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -190,12 +192,35 @@ std::string loadShaderSource(const std::string &filePath) {
   return buffer.str();
 }
 
+enum class ShaderType : GLenum {
+  Vertex = GL_VERTEX_SHADER,
+  Fragment = GL_FRAGMENT_SHADER,
+  Geometry = GL_GEOMETRY_SHADER
+};
+
+GLenum shaderTypeToGLenum(ShaderType shaderType) {
+  if (shaderType == ShaderType::Vertex) {
+    return GL_VERTEX_SHADER;
+  }
+  if (shaderType == ShaderType::Fragment) {
+    return GL_FRAGMENT_SHADER;
+  }
+  if (shaderType == ShaderType::Geometry) {
+    return GL_GEOMETRY_SHADER;
+  }
+
+  throw std::runtime_error("Received unsupported shader type.");
+}
+
 class AbstractShader {
 public:
   virtual ~AbstractShader() = default;
   virtual AbstractShader &replace(const std::string &, const std::string &) = 0;
+  virtual std::string src() const = 0;
+  virtual ShaderType type() const = 0;
 };
 
+template <ShaderType Type> //
 class Shader final : public AbstractShader {
 private:
   std::string m_src;
@@ -208,6 +233,7 @@ public:
       this->replace(key, value);
     }
   }
+
   Shader &replace(const std::string &key, const std::string &value) override {
     const std::string searchKey{"{{" + key + "}}"};
     size_t pos{0};
@@ -217,7 +243,145 @@ public:
     }
     return *this;
   }
-  std::string src() const { return m_src; }
+
+  std::string src() const override { return m_src; }
+
+  ShaderType type() const override { return Type; }
+};
+
+class ShaderProgram {
+private:
+  GLuint m_id{0};
+  mutable std::unordered_map<std::string, GLint> m_uniformCache;
+
+  static GLuint compileShader(const AbstractShader &shader) {
+    GLuint shaderId{glCreateShader(shaderTypeToGLenum(shader.type()))};
+
+    const std::string src{shader.src()};
+    const char *asd{src.c_str()};
+
+    glShaderSource(shaderId, 1, &asd, nullptr);
+    glCompileShader(shaderId);
+
+    GLint success;
+    glGetShaderiv(shaderId, GL_COMPILE_STATUS, &success);
+
+    if (!success) {
+      char infoLog[512];
+      glGetShaderInfoLog(shaderId, 512, nullptr, infoLog);
+      std::cerr << "Shader compile error:\n" << infoLog << std::endl;
+    }
+
+    return shaderId;
+  }
+
+  static void logLinkStatus(const GLuint shaderProgram,
+                            const std::string &prefix = "") {
+    GLint success;
+
+    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
+    if (!success) {
+      char infoLog[512];
+      glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
+      std::cerr << prefix << "Program link error:\n" << infoLog << std::endl;
+    }
+    std::cout << prefix << "Program link success.\n";
+  }
+
+  void finalizeProgram(
+      const std::initializer_list<std::reference_wrapper<const AbstractShader>>
+          shaders) {
+    m_id = glCreateProgram();
+
+    std::vector<GLuint> compiledIds;
+
+    for (const AbstractShader &shader : shaders) {
+      GLuint id{compileShader(shader)};
+      glAttachShader(m_id, id);
+      compiledIds.push_back(id);
+    }
+
+    glLinkProgram(m_id);
+    logLinkStatus(m_id);
+
+    for (const GLuint id : compiledIds) {
+      glDeleteShader(id);
+    }
+  }
+
+  GLint getUniformLocation(const std::string &name) const {
+    if (auto it{m_uniformCache.find(name)}; it != m_uniformCache.end()) {
+      return it->second;
+    }
+
+    GLint location{glGetUniformLocation(m_id, name.c_str())};
+
+    m_uniformCache[name] = location;
+
+    if (location == -1) {
+      std::cerr << "Warning: Uniform '" << name
+                << "' does not exist or was optimized out." << std::endl;
+    }
+
+    return location;
+  }
+
+public:
+  ShaderProgram(const Shader<ShaderType::Vertex> &vertexShader) {
+    finalizeProgram({vertexShader});
+  }
+
+  ShaderProgram(const Shader<ShaderType::Vertex> &vertexShader,
+                const Shader<ShaderType::Fragment> &fragmentShader) {
+
+    finalizeProgram({vertexShader, fragmentShader});
+  }
+
+  ShaderProgram(const Shader<ShaderType::Vertex> &vertexShader,
+                const Shader<ShaderType::Geometry> &geometryShader,
+                const Shader<ShaderType::Fragment> &fragmentShader) {
+    finalizeProgram({vertexShader, geometryShader, fragmentShader});
+  }
+
+  ShaderProgram(const ShaderProgram &) = delete;
+
+  ShaderProgram(ShaderProgram &&other) noexcept : m_id{other.m_id} {
+    other.m_id = 0;
+  }
+
+  ~ShaderProgram() { glDeleteProgram(m_id); }
+
+  ShaderProgram &operator=(const ShaderProgram &) = delete;
+
+  ShaderProgram &operator=(ShaderProgram &&other) noexcept {
+    if (this != &other) {
+      // TODO: Does opengl have a constant for 0 to not use magic constant
+      if (m_id != 0) {
+        glDeleteProgram(m_id);
+      }
+      m_id = other.m_id;
+      other.m_id = 0;
+      return *this;
+    }
+    return *this;
+  }
+
+  void use() const { glUseProgram(m_id); }
+
+  void unuse() const { glUseProgram(0); }
+
+  void setUniform(const std::string &name, int value) const {
+    glUniform1i(getUniformLocation(name), value);
+  }
+
+  void setUniform(const std::string &name, const glm::vec3 &value) const {
+    glUniform3fv(getUniformLocation(name), 1, glm::value_ptr(value));
+  }
+
+  void setUniform(const std::string &name, const glm::mat4 &value) const {
+    glUniformMatrix4fv(getUniformLocation(name), 1, GL_FALSE,
+                       glm::value_ptr(value));
+  }
 };
 
 const std::string computeShadow{R"(
@@ -290,7 +454,8 @@ vec3 computeFragColor(LightingComponent light, vec3 baseColor, float shadow) {
 }
 )"};
 
-const std::string vertexShaderSource = R"(
+const Shader<ShaderType::Vertex> vertexShaderSource{
+    R"(
 #version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aColor;
@@ -336,9 +501,10 @@ void main() {
   vs_out.vNormal = vNormal;
   vs_out.vColor = vColor;
 }
-)";
+)"};
 
-const std::string geometryShaderSource{R"(
+const Shader<ShaderType::Geometry> geometryShaderSource{
+    R"(
 #version 330 core
 layout (triangles) in;
 layout (line_strip, max_vertices = 6) out;
@@ -377,7 +543,8 @@ void main() {
 }
 )"};
 
-const std::string basicFragmentShaderSource{R"(
+const Shader<ShaderType::Fragment> basicFragmentShaderSource{
+    R"(
 #version 330 core
 
 out vec4 FragColor;
@@ -389,7 +556,7 @@ void main() {
 }
 )"};
 
-const Shader fragmentShaderSource{
+const Shader<ShaderType::Fragment> fragmentShaderSource{
     R"(
 #version 330 core
 
@@ -434,7 +601,7 @@ void main() {
 
 namespace ShaderSource {
 
-const Shader vertFloor{R"(
+const Shader<ShaderType::Vertex> vertFloor{R"(
 #version 330 core
 
 layout (location = 0) in vec3 aPos;
@@ -468,7 +635,7 @@ void main() {
 // Global illumination is a directional light, not a point light or spotlight.
 // Global light rays do not have a position, only a direction.
 
-const Shader fragFloor{
+const Shader<ShaderType::Fragment> fragFloor{
     R"(
 #version 330 core
 
@@ -531,37 +698,8 @@ void main() {
     {{"computeShadow", computeShadow}, //
      {"computeColor", computeColor}}};
 
-} // namespace ShaderSource
-
-// TODO: Render a plane and use calculus to make it more interesting. Procedural
-// terrain generation?
-
-// TODO: Render a pipe in a sinus & cosinus shape. Remove the dead code which
-// used to render sinus wave.
-
-GLuint compileShader(GLenum type, const std::string &source) {
-  GLuint shader = glCreateShader(type);
-
-  const char *src = source.c_str();
-  glShaderSource(shader, 1, &src, nullptr);
-  glCompileShader(shader);
-
-  GLint success;
-  glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-  if (!success) {
-    char infoLog[512];
-    glGetShaderInfoLog(shader, 512, nullptr, infoLog);
-    std::cerr << "Shader compile error:\n" << infoLog << std::endl;
-  }
-
-  return shader;
-}
-
-void logLinkStatus(const GLuint shaderProgram, const std::string &prefix = "");
-
-namespace ShadowMapping {
-
-const std::string vert{R"(
+const Shader<ShaderType::Vertex> vertDepth{
+    R"(
 #version 330 core
 
 layout (location = 0) in vec3 aPos;
@@ -575,36 +713,15 @@ void main() {
 }
 )"};
 
-GLuint createProgram() {
-  GLuint depthProgram{glCreateProgram()};
-  GLuint depthVertexShader{compileShader(GL_VERTEX_SHADER, vert)};
-  glAttachShader(depthProgram, depthVertexShader);
-  glLinkProgram(depthProgram);
-  logLinkStatus(depthProgram, "(depthProgram) - ");
-  glDeleteShader(depthVertexShader);
+} // namespace ShaderSource
 
-  return depthProgram;
-}
+// TODO: Render a plane and use calculus to make it more interesting. Procedural
+// terrain generation?
 
-struct DepthProgram {
-  GLuint program;
-  GLint projectionLocation;
-  GLint viewLocation;
-  GLint modelLocation;
-};
+// TODO: Render a pipe in a sinus & cosinus shape. Remove the dead code which
+// used to render sinus wave.
 
-DepthProgram createDepthProgram() {
-  DepthProgram depthProgram{.program = createProgram()};
-
-  depthProgram.projectionLocation =
-      glGetUniformLocation(depthProgram.program, "u_projection");
-  depthProgram.viewLocation =
-      glGetUniformLocation(depthProgram.program, "u_view");
-  depthProgram.modelLocation =
-      glGetUniformLocation(depthProgram.program, "u_model");
-
-  return depthProgram;
-}
+namespace ShadowMapping {
 
 struct LightMatrix {
   glm::mat4 view;
@@ -698,18 +815,6 @@ LightMatrix createLightMatrix(const CreateLightMatrixParam &param) {
 }
 } // namespace ShadowMapping
 
-void logLinkStatus(const GLuint shaderProgram, const std::string &prefix) {
-  GLint success;
-
-  glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
-  if (!success) {
-    char infoLog[512];
-    glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
-    std::cerr << prefix << "Program link error:\n" << infoLog << std::endl;
-  }
-  std::cout << prefix << "Program link success.\n";
-}
-
 // TODO: Generate distortion over a plane. This is where we can practically
 // apply calculus.
 
@@ -766,107 +871,17 @@ int main() {
 
   /* SHADER PROGRAM */
 
-  GLuint vertexShader = compileShader(GL_VERTEX_SHADER, vertexShaderSource);
-  GLuint fragmentShader =
-      compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource.src());
+  ShaderProgram shaderProgram{vertexShaderSource, fragmentShaderSource};
 
-  GLuint shaderProgram = glCreateProgram();
-  glAttachShader(shaderProgram, vertexShader);
-  glAttachShader(shaderProgram, fragmentShader);
+  ShaderProgram debugShaderProgram{vertexShaderSource, geometryShaderSource,
+                                   basicFragmentShaderSource};
 
-  glLinkProgram(shaderProgram);
+  ShaderProgram lightSourceProgram{vertexShaderSource,
+                                   basicFragmentShaderSource};
 
-  logLinkStatus(shaderProgram, "(shaderProgram) -");
+  ShaderProgram floorProgram{ShaderSource::vertFloor, ShaderSource::fragFloor};
 
-  GLuint debugGeometryShader{
-      compileShader(GL_GEOMETRY_SHADER, geometryShaderSource)};
-  GLuint basicFragmentShader{
-      compileShader(GL_FRAGMENT_SHADER, basicFragmentShaderSource)};
-  GLuint debugShaderProgram{glCreateProgram()};
-  glAttachShader(debugShaderProgram, vertexShader);
-  glAttachShader(debugShaderProgram, debugGeometryShader);
-  glAttachShader(debugShaderProgram, basicFragmentShader);
-
-  glLinkProgram(debugShaderProgram);
-
-  logLinkStatus(debugShaderProgram, "(debugShaderProgram) - ");
-
-  GLuint lightSourceProgram{glCreateProgram()};
-  glAttachShader(lightSourceProgram, vertexShader);
-  glAttachShader(lightSourceProgram, basicFragmentShader);
-
-  glLinkProgram(lightSourceProgram);
-
-  logLinkStatus(lightSourceProgram, "(lightSourceProgram) - ");
-
-  GLuint floorVertexShader{
-      compileShader(GL_VERTEX_SHADER, ShaderSource::vertFloor.src())};
-  GLuint floorFragmentShader{
-      compileShader(GL_FRAGMENT_SHADER, ShaderSource::fragFloor.src())};
-
-  GLuint floorProgram{glCreateProgram()};
-  glAttachShader(floorProgram, floorVertexShader);
-  glAttachShader(floorProgram, floorFragmentShader);
-
-  glLinkProgram(floorProgram);
-
-  logLinkStatus(floorProgram, "(floorProgram) - ");
-
-  glDeleteShader(vertexShader);
-  glDeleteShader(fragmentShader);
-  glDeleteShader(debugGeometryShader);
-  glDeleteShader(basicFragmentShader);
-  glDeleteShader(floorFragmentShader);
-
-  /* UNIFORMS */
-
-  // TODO: Automate uniform location retrieval and throw if an uniform location
-  // does not have a set value. It's repetitive and difficult to manually find a
-  // shader program that matches modified shader source, find the uniform
-  // location, and pass the value to it.
-  GLint projectionLocation{glGetUniformLocation(shaderProgram, "u_projection")};
-  GLint viewLocation{glGetUniformLocation(shaderProgram, "u_view")};
-  GLint modelLocation{glGetUniformLocation(shaderProgram, "u_model")};
-  GLint eyePositionLocation{
-      glGetUniformLocation(shaderProgram, "u_eyePosition")};
-  GLint lightPositionLocation{
-      glGetUniformLocation(shaderProgram, "u_lightPosition")};
-  GLint lightProjectionLocation{
-      glGetUniformLocation(shaderProgram, "u_lightProjection")};
-  GLint lightViewLocation{glGetUniformLocation(shaderProgram, "u_lightView")};
-  GLint shadowMapLocation{glGetUniformLocation(shaderProgram, "u_shadowMap")};
-
-  GLint debugProjectionLocation{
-      glGetUniformLocation(debugShaderProgram, "u_projection")};
-  GLint debugViewLocation{glGetUniformLocation(debugShaderProgram, "u_view")};
-  GLint debugModelLocation{glGetUniformLocation(debugShaderProgram, "u_model")};
-  // TODO: Figure out if we need to pass these uniforms to this shader program.
-  // here: u_lightProjection, u_lightView, u_shadowMap
-
-  GLint floorProjectionLocation{
-      glGetUniformLocation(floorProgram, "u_projection")};
-  GLint floorViewLocation{glGetUniformLocation(floorProgram, "u_view")};
-  GLint floorModelLocation{glGetUniformLocation(floorProgram, "u_model")};
-  GLint floorEyePositionLocation{
-      glGetUniformLocation(floorProgram, "u_eyePosition")};
-  GLint floorLightPositionLocation{
-      glGetUniformLocation(floorProgram, "u_lightPosition")};
-
-  GLint floorLightProjectionLocation{
-      glGetUniformLocation(floorProgram, "u_lightProjection")};
-  GLint floorLightViewLocation{
-      glGetUniformLocation(floorProgram, "u_lightView")};
-  GLint floorShadowMapLocation{
-      glGetUniformLocation(floorProgram, "u_shadowMap")};
-
-  GLint lightSourceProjectionLocation{
-      glGetUniformLocation(lightSourceProgram, "u_projection")};
-  GLint lightSourceViewLocation{
-      glGetUniformLocation(lightSourceProgram, "u_view")};
-  GLint lightSourceModelLocation{
-      glGetUniformLocation(lightSourceProgram, "u_model")};
-  // TODO: Figure out if we need to pass these uniforms to this shader program.
-  // here: u_lightProjection, u_lightView, u_shadowMap
+  ShaderProgram depthProgram{ShaderSource::vertDepth};
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -1112,8 +1127,6 @@ int main() {
   // Stop describing the framebuffer
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-  ShadowMapping::DepthProgram depthProgram{ShadowMapping::createDepthProgram()};
-
   /////////////////////////////////////////////////////////////////////////////
 
   // TODO: Textures
@@ -1290,21 +1303,16 @@ int main() {
     // Fix shadow acne
     glCullFace(GL_FRONT);
 
-    glUseProgram(depthProgram.program);
+    depthProgram.use();
 
-    glUniformMatrix4fv(depthProgram.projectionLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.projection));
-    glUniformMatrix4fv(depthProgram.viewLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.view));
-
-    glUniformMatrix4fv(depthProgram.modelLocation, 1, GL_FALSE,
-                       glm::value_ptr(modelMatrix));
+    depthProgram.setUniform("u_projection", lightMatrix.projection);
+    depthProgram.setUniform("u_view", lightMatrix.view);
+    depthProgram.setUniform("u_model", modelMatrix);
 
     glBindVertexArray(cubeBuffers.VAO);
     glDrawElements(GL_TRIANGLES, cubeMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
-    glUniformMatrix4fv(depthProgram.modelLocation, 1, GL_FALSE,
-                       glm::value_ptr(sphereModelMatrix));
+    depthProgram.setUniform("u_model", sphereModelMatrix);
 
     glBindVertexArray(sphereBuffers.VAO);
     glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
@@ -1325,74 +1333,58 @@ int main() {
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, depthMap.texture);
 
-    glUseProgram(shaderProgram);
-    glUniformMatrix4fv(projectionLocation, 1, GL_FALSE,
-                       glm::value_ptr(projectionMatrix));
-    glUniformMatrix4fv(viewLocation, 1, GL_FALSE, glm::value_ptr(viewMatrix));
+    shaderProgram.use();
 
-    glUniform3fv(eyePositionLocation, 1, glm::value_ptr(eye));
-    glUniform3fv(lightPositionLocation, 1, glm::value_ptr(lightPosition));
-
-    glUniformMatrix4fv(lightProjectionLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.projection));
-    glUniformMatrix4fv(lightViewLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.view));
-
+    shaderProgram.setUniform("u_projection", projectionMatrix);
+    shaderProgram.setUniform("u_view", viewMatrix);
+    shaderProgram.setUniform("u_eyePosition", eye);
+    shaderProgram.setUniform("u_lightPosition", lightPosition);
+    shaderProgram.setUniform("u_lightProjection", lightMatrix.projection);
+    shaderProgram.setUniform("u_lightView", lightMatrix.view);
     // Texture unit 0 is reserved for color/diffuse
-    glUniform1i(shadowMapLocation, 1);
-
-    glUniformMatrix4fv(modelLocation, 1, GL_FALSE, glm::value_ptr(modelMatrix));
+    shaderProgram.setUniform("u_shadowMap", 1);
+    shaderProgram.setUniform("u_model", modelMatrix);
 
     glBindVertexArray(cubeBuffers.VAO);
     glDrawElements(GL_TRIANGLES, cubeMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
-    glUniformMatrix4fv(modelLocation, 1, GL_FALSE,
-                       glm::value_ptr(sphereModelMatrix));
+    shaderProgram.setUniform("u_model", sphereModelMatrix);
 
     glBindVertexArray(sphereBuffers.VAO);
     glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
-    glUseProgram(debugShaderProgram);
+    debugShaderProgram.use();
 
-    glUniformMatrix4fv(debugProjectionLocation, 1, GL_FALSE,
-                       glm::value_ptr(projectionMatrix));
-    glUniformMatrix4fv(debugViewLocation, 1, GL_FALSE,
-                       glm::value_ptr(viewMatrix));
-    glUniformMatrix4fv(debugModelLocation, 1, GL_FALSE,
-                       glm::value_ptr(sphereModelMatrix));
+    debugShaderProgram.setUniform("u_projection", projectionMatrix);
+    debugShaderProgram.setUniform("u_view", viewMatrix);
+    debugShaderProgram.setUniform("u_model", sphereModelMatrix);
+    // TODO: Figure out if we need to pass these uniforms to this shader
+    // program: u_lightProjection, u_lightView, u_shadowMap
 
     glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
-    glUseProgram(floorProgram);
+    floorProgram.use();
 
-    glUniformMatrix4fv(floorProjectionLocation, 1, GL_FALSE,
-                       glm::value_ptr(projectionMatrix));
-    glUniformMatrix4fv(floorViewLocation, 1, GL_FALSE,
-                       glm::value_ptr(viewMatrix));
-    glUniformMatrix4fv(floorModelLocation, 1, GL_FALSE,
-                       glm::value_ptr(floorModelMatrix));
-    glUniform3fv(floorEyePositionLocation, 1, glm::value_ptr(eye));
-    glUniform3fv(floorLightPositionLocation, 1, glm::value_ptr(lightPosition));
-
-    glUniformMatrix4fv(floorLightProjectionLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.projection));
-    glUniformMatrix4fv(floorLightViewLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightMatrix.view));
-
+    floorProgram.setUniform("u_projection", projectionMatrix);
+    floorProgram.setUniform("u_view", viewMatrix);
+    floorProgram.setUniform("u_model", floorModelMatrix);
+    floorProgram.setUniform("u_eyePosition", eye);
+    floorProgram.setUniform("u_lightPosition", lightPosition);
+    floorProgram.setUniform("u_lightProjection", lightMatrix.projection);
+    floorProgram.setUniform("u_lightView", lightMatrix.view);
     // Texture unit 0 is reserved for color/diffuse
-    glUniform1i(floorShadowMapLocation, 1);
+    floorProgram.setUniform("u_shadowMap", 1);
 
     glBindVertexArray(floorBuffers.VAO);
     glDrawElements(GL_TRIANGLES, floorMesh.indices.size(), GL_UNSIGNED_INT, 0);
 
-    glUseProgram(lightSourceProgram);
+    lightSourceProgram.use();
 
-    glUniformMatrix4fv(lightSourceProjectionLocation, 1, GL_FALSE,
-                       glm::value_ptr(projectionMatrix));
-    glUniformMatrix4fv(lightSourceViewLocation, 1, GL_FALSE,
-                       glm::value_ptr(viewMatrix));
-    glUniformMatrix4fv(lightSourceModelLocation, 1, GL_FALSE,
-                       glm::value_ptr(lightSourceModelMatrix));
+    lightSourceProgram.setUniform("u_projection", projectionMatrix);
+    lightSourceProgram.setUniform("u_view", viewMatrix);
+    lightSourceProgram.setUniform("u_model", lightSourceModelMatrix);
+    // TODO: Figure out if we need to pass these uniforms to this shader
+    // program: u_lightProjection, u_lightView, u_shadowMap
 
     glBindVertexArray(lightSourceBuffers.VAO);
     glDrawElements(GL_TRIANGLES, lightSourceMesh.indices.size(),
