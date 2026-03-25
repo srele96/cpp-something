@@ -218,6 +218,9 @@ public:
   virtual AbstractShader &replace(const std::string &, const std::string &) = 0;
   virtual std::string src() const = 0;
   virtual ShaderType type() const = 0;
+  virtual AbstractShader &
+  insertDefines(const std::vector<std::string> &defines) = 0;
+  virtual AbstractShader &clearDefines() = 0;
 };
 
 template <ShaderType Type> //
@@ -225,13 +228,75 @@ class Shader final : public AbstractShader {
 private:
   std::string m_src;
 
+  struct DefinesRange {
+    size_t begin{0};
+    size_t length{0};
+    bool valid{false};
+  };
+
+  DefinesRange getDefinesRange() const {
+    const std::string definesBegin{"/*{{defines_begin}}*/"};
+    const std::string definesEnd{"/*{{defines_end}}*/"};
+
+    size_t posBegin{m_src.find(definesBegin)};
+    size_t posEnd{m_src.find(definesEnd)};
+
+    if (posBegin != std::string::npos && posEnd != std::string::npos) {
+      size_t contentStart{posBegin + definesBegin.length()};
+      size_t contentLength{posEnd - contentStart};
+      const DefinesRange definesRange{
+          .begin = contentStart, .length = contentLength, .valid = true};
+      return definesRange;
+    }
+
+    return DefinesRange{.valid = false};
+  }
+
 public:
   Shader(std::string src,
-         const std::unordered_map<std::string, std::string> &replacements = {})
+         const std::unordered_map<std::string, std::string> &replacements = {},
+         const std::vector<std::string> &defines = {})
       : m_src{std::move(src)} {
     for (const auto &[key, value] : replacements) {
       this->replace(key, value);
     }
+    insertDefines(defines);
+  }
+
+  Shader &insertDefines(const std::vector<std::string> &defines = {}) override {
+    // TODO: Maybe prevent inserting multiple defines.
+    //
+    // Currently allows inserting multiple defines. It makes adding method to
+    // define a single define and remove it more difficult, as we have to
+    // currently treat every define we want to remove, as if there are multiple
+    // #defines of it.
+
+    if (defines.empty()) {
+      return *this;
+    }
+
+    const DefinesRange range{getDefinesRange()};
+    if (!range.valid) {
+      return *this;
+    }
+
+    std::string strDefines{"\n"};
+
+    for (const auto &value : defines) {
+      strDefines += "#define " + value + "\n";
+    }
+
+    m_src.insert(range.begin, strDefines);
+
+    return *this;
+  }
+
+  Shader &clearDefines() override {
+    const DefinesRange range{getDefinesRange()};
+    if (range.valid) {
+      m_src.replace(range.begin, range.length, "\n");
+    }
+    return *this;
   }
 
   Shader &replace(const std::string &key, const std::string &value) override {
@@ -355,7 +420,6 @@ public:
 
   ShaderProgram &operator=(ShaderProgram &&other) noexcept {
     if (this != &other) {
-      // TODO: Does opengl have a constant for 0 to not use magic constant
       if (m_id != 0) {
         glDeleteProgram(m_id);
       }
@@ -383,6 +447,8 @@ public:
                        glm::value_ptr(value));
   }
 };
+
+namespace ShaderSource {
 
 const std::string computeShadow{R"(
 float computeShadow(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir, sampler2DShadow shadowMap) {
@@ -454,9 +520,13 @@ vec3 computeFragColor(LightingComponent light, vec3 baseColor, float shadow) {
 }
 )"};
 
-const Shader<ShaderType::Vertex> vertexShaderSource{
+Shader<ShaderType::Vertex> vertexShader{
     R"(
 #version 330 core
+
+/*{{defines_begin}}*/
+/*{{defines_end}}*/
+
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aColor;
 layout (location = 2) in vec3 aNormal;
@@ -466,6 +536,7 @@ out vec3 vNormal;
 out vec3 vFragPos;
 out vec4 vFragPosLightSpace;
 
+#ifdef HAS_GEOMETRY_SHADER
 // Does it matter if we output this and we don't have geometry shader in the next stage?
 // Do we have to match VS_OUT and vs_out to be exactly same with different casing?
 out VS_OUT {
@@ -473,6 +544,7 @@ out VS_OUT {
   vec3 vNormal;
   vec3 vColor;
 } vs_out;
+#endif // HAS_GEOMETRY_SHADER
 
 uniform mat4 u_view;
 uniform mat4 u_projection;
@@ -483,10 +555,10 @@ uniform mat4 u_lightView;
 void main() {
   vec4 worldPosition = u_model * vec4(aPos, 1.0);
 
+  gl_Position = u_projection * u_view * worldPosition;
+
   // To make the lighting color math to work, the computation must happen in the same space. We must not mix spaces.
   vFragPos = vec3(worldPosition);
-
-  gl_Position = u_projection * u_view * worldPosition;
 
   vColor = aColor;
 
@@ -495,15 +567,17 @@ void main() {
   vNormal = mat3(transpose(inverse(u_model))) * aNormal;
   vFragPosLightSpace = u_lightProjection * u_lightView * worldPosition;
 
-  vs_out.worldPos = worldPosition.xyz;
+#ifdef HAS_GEOMETRY_SHADER
+  vs_out.worldPos = vec3(worldPosition);
   // Keep the outputs to keep the compatibility with fragment shader.
   // Is it fine to access vNormal like this? Since it's marked as 'out'?
   vs_out.vNormal = vNormal;
   vs_out.vColor = vColor;
+#endif // HAS_GEOMETRY_SHADER
 }
 )"};
 
-const Shader<ShaderType::Geometry> geometryShaderSource{
+const Shader<ShaderType::Geometry> geometryShader{
     R"(
 #version 330 core
 layout (triangles) in;
@@ -543,7 +617,7 @@ void main() {
 }
 )"};
 
-const Shader<ShaderType::Fragment> basicFragmentShaderSource{
+const Shader<ShaderType::Fragment> basicFragmentShader{
     R"(
 #version 330 core
 
@@ -556,92 +630,20 @@ void main() {
 }
 )"};
 
-const Shader<ShaderType::Fragment> fragmentShaderSource{
-    R"(
-#version 330 core
-
-in vec3 vColor;
-in vec3 vNormal;
-in vec3 vFragPos;
-in vec4 vFragPosLightSpace;
-
-out vec4 FragColor;
-
-uniform vec3 u_eyePosition;
-uniform vec3 u_lightPosition;
-uniform sampler2DShadow u_shadowMap;
-
-{{computeShadow}}
-
-{{computeColor}}
-
-void main() {
-  vec3 normal = normalize(vNormal);
-
-  vec3 lightColor = vec3(1.0, 0.98, 0.9);
-
-  vec3 lightDirection = normalize(u_lightPosition - vFragPos);
-  vec3 lightReflection = reflect(-lightDirection, normal);
-  vec3 eyeDirection = normalize(u_eyePosition - vFragPos);
-
-  LightingComponent lightComponent;
-  lightComponent.ambient = computeAmbient(lightColor);
-  lightComponent.diffuse = computeDiffuse(lightColor, lightDirection, normal);
-  lightComponent.specular = computeSpecular(lightColor, eyeDirection, lightReflection);
-
-  float shadow = computeShadow(vFragPosLightSpace, normal, lightDirection, u_shadowMap);
-
-  vec3 fragmentColor = computeFragColor(lightComponent, vColor, shadow);
-
-  FragColor = vec4(fragmentColor, 1.0);
-}
-)",
-    {{"computeColor", computeColor}, //
-     {"computeShadow", computeShadow}}};
-
-namespace ShaderSource {
-
-const Shader<ShaderType::Vertex> vertFloor{R"(
-#version 330 core
-
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aColor;
-layout (location = 2) in vec3 aNormal;
-
-out vec3 vColor;
-out vec3 vFragPos;
-out vec3 vNormal;
-out vec4 vFragPosLightSpace;
-
-uniform mat4 u_view;
-uniform mat4 u_projection;
-uniform mat4 u_model;
-uniform mat4 u_lightProjection;
-uniform mat4 u_lightView;
-
-void main() {
-  vec4 worldPosition = u_model * vec4(aPos, 1.0);
-
-  gl_Position = u_projection * u_view * worldPosition;
-
-  vFragPos = vec3(worldPosition.xyz);
-  vColor = aColor;
-  vNormal = mat3(transpose(inverse(u_model))) * aNormal;
-  vFragPosLightSpace = u_lightProjection * u_lightView * worldPosition;
-}
-)"};
-
 // TODO: Change computing light direction to accepting uniform light direction.
 // Global illumination is a directional light, not a point light or spotlight.
 // Global light rays do not have a position, only a direction.
 
-const Shader<ShaderType::Fragment> fragFloor{
+Shader<ShaderType::Fragment> fragmentShader{
     R"(
 #version 330 core
 
+/*{{defines_begin}}*/
+/*{{defines_end}}*/
+
 in vec3 vColor;
-in vec3 vFragPos;
 in vec3 vNormal;
+in vec3 vFragPos;
 in vec4 vFragPosLightSpace;
 
 out vec4 FragColor;
@@ -654,6 +656,7 @@ uniform sampler2DShadow u_shadowMap;
 
 {{computeColor}}
 
+#ifdef COMPUTE_CHECKER
 vec3 computeChecker(vec3 fragPos) {
   // Make each checker sides 1 unit long
   vec2 pos = fragPos.xz * 0.5;
@@ -670,6 +673,15 @@ vec3 computeChecker(vec3 fragPos) {
   return vec3(checker);
 }
 
+vec3 getColor(vec3 fragPos, vec3 color) {
+  return computeChecker(fragPos);
+}
+#else
+vec3 getColor(vec3 fragPos, vec3 color) {
+  return color;
+}
+#endif // COMPUTE_CHECKER
+
 void main() {
   vec3 normal = normalize(vNormal);
 
@@ -684,34 +696,17 @@ void main() {
   lightComponent.diffuse = computeDiffuse(lightColor, lightDirection, normal);
   lightComponent.specular = computeSpecular(lightColor, eyeDirection, lightReflection);
 
-  vec3 checkerColor = computeChecker(vFragPos);
-
   float shadow = computeShadow(vFragPosLightSpace, normal, lightDirection, u_shadowMap);
 
-  vec3 fragmentColor = computeFragColor(lightComponent, checkerColor, shadow);
+  vec3 baseColor = getColor(vFragPos, vColor);
 
-  // TODO: Try out the fade factor, the further the checkerboard fragment is
-  // from the eye, the more it is faded out
+  vec3 fragmentColor = computeFragColor(lightComponent, baseColor, shadow);
+
   FragColor = vec4(fragmentColor, 1.0);
 }
 )",
-    {{"computeShadow", computeShadow}, //
-     {"computeColor", computeColor}}};
-
-const Shader<ShaderType::Vertex> vertDepth{
-    R"(
-#version 330 core
-
-layout (location = 0) in vec3 aPos;
-
-uniform mat4 u_projection;
-uniform mat4 u_view;
-uniform mat4 u_model;
-
-void main() {
-  gl_Position = u_projection * u_view * u_model * vec4(aPos, 1.0);
-}
-)"};
+    {{"computeColor", computeColor}, //
+     {"computeShadow", computeShadow}}};
 
 } // namespace ShaderSource
 
@@ -871,17 +866,30 @@ int main() {
 
   /* SHADER PROGRAM */
 
-  ShaderProgram shaderProgram{vertexShaderSource, fragmentShaderSource};
+  ShaderProgram shaderProgram{ShaderSource::vertexShader,
+                              ShaderSource::fragmentShader};
 
-  ShaderProgram debugShaderProgram{vertexShaderSource, geometryShaderSource,
-                                   basicFragmentShaderSource};
+  ShaderSource::vertexShader.insertDefines({"HAS_GEOMETRY_SHADER"});
+  ShaderProgram debugShaderProgram{
+      ShaderSource::vertexShader,       //
+      ShaderSource::geometryShader,     //
+      ShaderSource::basicFragmentShader //
+  };
+  ShaderSource::vertexShader.clearDefines();
 
-  ShaderProgram lightSourceProgram{vertexShaderSource,
-                                   basicFragmentShaderSource};
+  ShaderProgram lightSourceProgram{
+      ShaderSource::vertexShader,       //
+      ShaderSource::basicFragmentShader //
+  };
 
-  ShaderProgram floorProgram{ShaderSource::vertFloor, ShaderSource::fragFloor};
+  ShaderSource::fragmentShader.insertDefines({"COMPUTE_CHECKER"});
+  ShaderProgram floorProgram{
+      ShaderSource::vertexShader,  //
+      ShaderSource::fragmentShader //
+  };
+  ShaderSource::fragmentShader.clearDefines();
 
-  ShaderProgram depthProgram{ShaderSource::vertDepth};
+  ShaderProgram depthProgram{ShaderSource::vertexShader};
 
   /////////////////////////////////////////////////////////////////////////////
 
