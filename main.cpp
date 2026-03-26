@@ -27,6 +27,178 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "glm/gtx/rotate_vector.hpp" // This API is supposedly "experimental" for the past 10 years.
 
+template <typename> constexpr bool always_false_v{false};
+
+// Catch unsupported types at compile time
+template <typename T> struct GLIndexTraits {
+  static_assert(always_false_v<T>,
+                "Invalid index trait mapping type received!");
+  static constexpr GLenum type{0}; // Satisfy the autocomplete
+};
+template <> struct GLIndexTraits<uint32_t> {
+  static constexpr GLenum type{GL_UNSIGNED_INT};
+};
+
+// Catch unsupported types at compile time
+template <typename T> struct GLVertexTraits {
+  static_assert(always_false_v<T>,
+                "Invalid Vertex trait mapping type received.");
+};
+template <> struct GLVertexTraits<float> {
+  static constexpr GLenum type{GL_FLOAT};
+};
+// TODO: If we need to support GL_INT, we need to extend VertexLayout.
+
+struct VertexAttribute {
+  GLuint index;
+  GLint size;
+  GLenum type;
+  GLboolean normalized;
+  GLsizei offset;
+};
+
+class VertexLayout {
+private:
+  std::vector<VertexAttribute> m_attributes;
+  GLsizei m_stride{0};
+  GLuint m_currentIndex{0};
+
+public:
+  template <typename T>
+  void push(const GLint size, GLboolean normalized = GL_FALSE) {
+    m_attributes.push_back({
+        .index = m_currentIndex,
+        .size = size,
+        .type = GLVertexTraits<T>::type,
+        .normalized = normalized,
+        // Why do we assign offset per each to be m_stride
+        .offset = m_stride,
+    });
+
+    m_stride += size * sizeof(T);
+    ++m_currentIndex;
+  }
+
+  const std::vector<VertexAttribute> &attributes() const {
+    return m_attributes;
+  }
+
+  GLsizei stride() const { return m_stride; }
+};
+
+class Mesh {
+private:
+  // TODO: Create VAO class
+  // https://gamedev.stackexchange.com/questions/204015/how-to-abstract-vao-as-a-class-in-c
+  //
+  // TODO: Create VBO class
+  // https://gamedev.stackexchange.com/questions/204015/how-to-abstract-vao-as-a-class-in-c
+
+  GLuint m_vertexArrayObjectId{0};
+  GLuint m_vertexBufferObjectId{0};
+  GLuint m_elementBufferObjectId{0};
+
+  GLenum m_indexType{0};
+  GLsizei m_indicesCount{0};
+
+  void cleanup() {
+    if (m_vertexArrayObjectId != 0) {
+      glDeleteVertexArrays(1, &m_vertexArrayObjectId);
+    }
+    if (m_vertexBufferObjectId != 0) {
+      glDeleteBuffers(1, &m_vertexBufferObjectId);
+    }
+    if (m_elementBufferObjectId != 0) {
+      glDeleteBuffers(1, &m_elementBufferObjectId);
+    }
+  }
+
+public:
+  template <typename VertexType, typename IndexType>
+  Mesh(const std::vector<VertexType> &vertices,
+       const std::vector<IndexType> &indices, const VertexLayout &layout) {
+    if constexpr (!std::is_fundamental_v<VertexType>) {
+      assert(layout.stride() == sizeof(VertexType) &&
+             "VertexType has padded data. Layout stride does not match C++ "
+             "struct size.");
+    }
+
+    // GLTypeTraits limits IndexType to fundamental type and sizeof() won't
+    // return padded data
+    m_indexType = GLIndexTraits<IndexType>::type;
+    m_indicesCount = static_cast<GLsizei>(indices.size());
+
+    glGenVertexArrays(1, &m_vertexArrayObjectId);
+    glGenBuffers(1, &m_vertexBufferObjectId);
+    glGenBuffers(1, &m_elementBufferObjectId);
+
+    glBindVertexArray(m_vertexArrayObjectId);
+
+    // TODO: What if sizeof() gives compiler-padded size?
+    glBindBuffer(GL_ARRAY_BUFFER, m_vertexBufferObjectId);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(VertexType),
+                 vertices.data(), GL_STATIC_DRAW);
+
+    // TODO: What if sizeof() gives compiler-padded size?
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_elementBufferObjectId);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(IndexType),
+                 indices.data(), GL_STATIC_DRAW);
+
+    for (const auto &attribute : layout.attributes()) {
+      glEnableVertexAttribArray(attribute.index);
+      glVertexAttribPointer(                               //
+          attribute.index,                                 //
+          attribute.size,                                  //
+          attribute.type,                                  //
+          attribute.normalized,                            //
+          layout.stride(),                                 //
+          reinterpret_cast<const void *>(attribute.offset) //
+      );
+    }
+
+    // Unbind VAO first to protect its state
+    glBindVertexArray(0);
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+  }
+
+  Mesh(const Mesh &) = delete;
+
+  Mesh &operator=(const Mesh &) = delete;
+
+  Mesh(Mesh &&other) noexcept
+      : m_vertexArrayObjectId{std::exchange(other.m_vertexArrayObjectId, 0)},
+        m_vertexBufferObjectId{std::exchange(other.m_vertexBufferObjectId, 0)},
+        m_elementBufferObjectId{
+            std::exchange(other.m_elementBufferObjectId, 0)},
+        m_indexType{std::exchange(other.m_indexType, 0)},
+        m_indicesCount{std::exchange(other.m_indicesCount, 0)} {}
+
+  Mesh &operator=(Mesh &&other) noexcept {
+    if (this != &other) {
+      cleanup();
+
+      m_vertexArrayObjectId = std::exchange(other.m_vertexArrayObjectId, 0);
+      m_vertexBufferObjectId = std::exchange(other.m_vertexBufferObjectId, 0);
+      m_elementBufferObjectId = std::exchange(other.m_elementBufferObjectId, 0);
+      m_indexType = std::exchange(other.m_indexType, 0);
+      m_indicesCount = std::exchange(other.m_indicesCount, 0);
+    }
+    return *this;
+  }
+
+  ~Mesh() { cleanup(); }
+
+  GLenum indexType() const { return m_indexType; }
+
+  GLsizei indicesCount() const { return m_indicesCount; }
+
+  void bind() const { glBindVertexArray(m_vertexArrayObjectId); }
+
+  void unbind() const { glBindVertexArray(0); }
+};
+
 struct Vertex {
   glm::vec3 pos;
   glm::vec3 color;
@@ -38,9 +210,8 @@ struct MeshData {
   std::vector<unsigned int> indices;
 };
 
-MeshData generateCube(float side) {
+Mesh generateCube(float side) {
   float h = side / 2.0f;
-  MeshData mesh;
 
   struct Face {
     glm::vec3 normal, right, up, color;
@@ -59,37 +230,48 @@ MeshData generateCube(float side) {
       {{-1, 0, 0}, {0, 0, 1}, {0, 1, 0}, white}   // Left
   };
 
+  std::vector<Vertex> vertices;
+  std::vector<unsigned int> indices;
+
   for (int i = 0; i < faces.size(); i++) {
     const auto &f = faces[i];
     glm::vec3 center = f.normal * h;
 
     // Add 4 edge vertices
-    mesh.vertices.push_back({.pos = center - (f.right * h) - (f.up * h),
-                             .color = f.color,
-                             .normal = f.normal}); // BottomLeft
-    mesh.vertices.push_back({.pos = center + (f.right * h) - (f.up * h),
-                             .color = f.color,
-                             .normal = f.normal}); // TopLeft
-    mesh.vertices.push_back({.pos = center + (f.right * h) + (f.up * h),
-                             .color = f.color,
-                             .normal = f.normal}); // TopRight
-    mesh.vertices.push_back({.pos = center - (f.right * h) + (f.up * h),
-                             .color = f.color,
-                             .normal = f.normal}); // BottomRight
+    vertices.push_back({.pos = center - (f.right * h) - (f.up * h),
+                        .color = f.color,
+                        .normal = f.normal}); // BottomLeft
+    vertices.push_back({.pos = center + (f.right * h) - (f.up * h),
+                        .color = f.color,
+                        .normal = f.normal}); // TopLeft
+    vertices.push_back({.pos = center + (f.right * h) + (f.up * h),
+                        .color = f.color,
+                        .normal = f.normal}); // TopRight
+    vertices.push_back({.pos = center - (f.right * h) + (f.up * h),
+                        .color = f.color,
+                        .normal = f.normal}); // BottomRight
 
     // Add face indices
     unsigned int offset = i * 4;
 
     // Does the order of indices matter?
-    mesh.indices.push_back(offset + 0);
-    mesh.indices.push_back(offset + 1);
-    mesh.indices.push_back(offset + 2);
+    indices.push_back(offset + 0);
+    indices.push_back(offset + 1);
+    indices.push_back(offset + 2);
     // What if we have more or less indices?
-    mesh.indices.push_back(offset + 2);
-    mesh.indices.push_back(offset + 3);
-    mesh.indices.push_back(offset + 0);
+    indices.push_back(offset + 2);
+    indices.push_back(offset + 3);
+    indices.push_back(offset + 0);
     // How many triangles can we render from 4 vertices?
   }
+
+  VertexLayout layout;
+  layout.push<float>(3);
+  layout.push<float>(3);
+  layout.push<float>(3);
+
+  Mesh mesh{vertices, indices, layout};
+
   return mesh;
 }
 
@@ -103,10 +285,10 @@ glm::vec3 sphericalCoord(const float yaw, const float pitch,
   return r * coord;
 }
 
-MeshData generateSphere(const int latitudeBands, const int longitudeBands,
-                        const float r = 1,
-                        const glm::vec3 &color = {1.0f, 1.0f, 1.0f}) {
-  MeshData sphereMesh;
+Mesh generateSphere(const int latitudeBands, const int longitudeBands,
+                    const float r = 1,
+                    const glm::vec3 &color = {1.0f, 1.0f, 1.0f}) {
+  std::vector<Vertex> vertices;
 
   const float pi{glm::pi<float>()};
 
@@ -126,13 +308,15 @@ MeshData generateSphere(const int latitudeBands, const int longitudeBands,
 
       const glm::vec3 white{1.0f, 1.0f, 1.0f};
 
-      sphereMesh.vertices.push_back({
+      vertices.push_back({
           .pos = r * normal,
           .color = color,
           .normal = normal,
       });
     }
   }
+
+  std::vector<unsigned int> indices;
 
   for (int i{0}; i < latitudeBands; ++i) {
     for (int j{0}; j < longitudeBands; ++j) {
@@ -143,26 +327,28 @@ MeshData generateSphere(const int latitudeBands, const int longitudeBands,
       const int bottomLeft{(i + 1) * rowStride + j};
       const int bottomRight{bottomLeft + 1};
 
-      sphereMesh.indices.push_back(topLeft);
-      sphereMesh.indices.push_back(topRight);
-      sphereMesh.indices.push_back(bottomLeft);
+      indices.push_back(topLeft);
+      indices.push_back(topRight);
+      indices.push_back(bottomLeft);
 
-      sphereMesh.indices.push_back(topRight);
-      sphereMesh.indices.push_back(bottomRight);
-      sphereMesh.indices.push_back(bottomLeft);
+      indices.push_back(topRight);
+      indices.push_back(bottomRight);
+      indices.push_back(bottomLeft);
     }
   }
 
-  return sphereMesh;
+  VertexLayout layout;
+
+  layout.push<float>(3);
+  layout.push<float>(3);
+  layout.push<float>(3);
+
+  Mesh mesh{vertices, indices, layout};
+
+  return mesh;
 }
 
-// TODO: Figure out if light source should light the quad plane accordingly?
-// Because i want to use quad as a floor plane
-MeshData generateQuad() {
-  MeshData quad;
-
-  float edge{0.5f};
-
+Mesh generateQuad(const float edge = 0.5f) {
   auto createVertex{[](const glm::vec3 &pos) -> Vertex {
     const glm::vec3 color{1.0f, 1.0f, 1.0f};
     const glm::vec3 normal{0.0f, 1.0f, 0.0f};
@@ -170,16 +356,25 @@ MeshData generateQuad() {
     return {.pos = pos, .color = color, .normal = normal};
   }};
 
-  quad.vertices = {
+  std::vector<Vertex> vertices{
       createVertex({-edge, 0, -edge}), //
       createVertex({edge, 0, -edge}),  //
       createVertex({edge, 0, edge}),   //
       createVertex({-edge, 0, edge}),  //
   };
 
-  quad.indices = {0, 1, 2, 2, 3, 0};
+  std::vector<unsigned int> indices{0, 1, 2, 2, 3, 0};
 
-  return quad;
+  VertexLayout layout;
+
+  // 3 floats for position, color, normal
+  layout.push<float>(3);
+  layout.push<float>(3);
+  layout.push<float>(3);
+
+  Mesh mesh{vertices, indices, layout};
+
+  return mesh;
 }
 
 std::string loadShaderSource(const std::string &filePath) {
@@ -370,6 +565,9 @@ private:
     logLinkStatus(m_id);
 
     for (const GLuint id : compiledIds) {
+      // https://gamedev.stackexchange.com/questions/47910/after-a-succesful-gllinkprogram-should-i-delete-detach-my-shaders
+      // https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDetachShader.xhtml
+      glDetachShader(m_id, id);
       glDeleteShader(id);
     }
   }
@@ -708,6 +906,11 @@ void main() {
     {{"computeColor", computeColor}, //
      {"computeShadow", computeShadow}}};
 
+// TODO: Add post-processing shader for Vignette and Grayscale
+// This is a simple shader, and allows me to have 3 render passes, at which
+// point i can abstract out the renderer, render pass, framebuffer, into each
+// respective class.
+
 } // namespace ShaderSource
 
 // TODO: Render a plane and use calculus to make it more interesting. Procedural
@@ -856,12 +1059,6 @@ int main() {
     std::cerr << "Failed to initialize GLAD\n";
   }
 
-  /* GL setup */
-
-  glEnable(GL_DEPTH_TEST);
-
-  glViewport(0, 0, window_width, window_height);
-
   /////////////////////////////////////////////////////////////////////////////
 
   /* SHADER PROGRAM */
@@ -893,125 +1090,17 @@ int main() {
 
   /////////////////////////////////////////////////////////////////////////////
 
-  struct CubeBuffers {
-    GLuint VAO, VBO, EBO;
-  };
-
-  MeshData cubeMesh{generateCube(4.0f)};
-
-  CubeBuffers cubeBuffers;
-
-  glGenVertexArrays(1, &cubeBuffers.VAO);
-  glGenBuffers(1, &cubeBuffers.VBO);
-  glGenBuffers(1, &cubeBuffers.EBO);
-
-  glBindVertexArray(cubeBuffers.VAO);
-
-  glBindBuffer(GL_ARRAY_BUFFER, cubeBuffers.VBO);
-  glBufferData(GL_ARRAY_BUFFER, cubeMesh.vertices.size() * sizeof(Vertex),
-               cubeMesh.vertices.data(), GL_STATIC_DRAW);
-
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, cubeBuffers.EBO);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-               cubeMesh.indices.size() * sizeof(unsigned int),
-               cubeMesh.indices.data(), GL_STATIC_DRAW);
-
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
-  glEnableVertexAttribArray(0);
-
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                        (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(1);
-
-  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                        (void *)(6 * sizeof(float)));
-  glEnableVertexAttribArray(2);
-
-  glBindVertexArray(0);
+  Mesh cube{generateCube(4.0f)};
 
   /////////////////////////////////////////////////////////////////////////////
-
-  // I think it would be great if i had a class that handles fragment shader,
-  // buffer creation, accepting and passing down uniforms, using the shader
-  // during rendering, ...
-  struct SphereBuffers {
-    GLuint VAO, VBO, EBO;
-  };
 
   const int latitudeBands{30};
   const int longitudeBands{30};
-  MeshData sphereMesh{generateSphere(latitudeBands, longitudeBands, 8.0f)};
-
-  SphereBuffers sphereBuffers;
-
-  glGenVertexArrays(1, &sphereBuffers.VAO);
-  glGenBuffers(1, &sphereBuffers.VBO);
-  glGenBuffers(1, &sphereBuffers.EBO);
-
-  glBindVertexArray(sphereBuffers.VAO);
-
-  glBindBuffer(GL_ARRAY_BUFFER, sphereBuffers.VBO);
-  glBufferData(GL_ARRAY_BUFFER, sphereMesh.vertices.size() * sizeof(Vertex),
-               sphereMesh.vertices.data(), GL_STATIC_DRAW);
-
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sphereBuffers.EBO);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-               sphereMesh.indices.size() * sizeof(unsigned int),
-               sphereMesh.indices.data(), GL_STATIC_DRAW);
-
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
-  glEnableVertexAttribArray(0);
-
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                        (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(1);
-
-  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                        (void *)(6 * sizeof(float)));
-  glEnableVertexAttribArray(2);
-
-  glBindVertexArray(0);
+  Mesh sphere{generateSphere(latitudeBands, longitudeBands, 8.0f)};
 
   /////////////////////////////////////////////////////////////////////////////
-  struct FloorBuffers {
-    GLuint VAO, VBO, EBO;
-  };
 
-  FloorBuffers floorBuffers;
-
-  glGenVertexArrays(1, &floorBuffers.VAO);
-  glGenBuffers(1, &floorBuffers.VBO);
-  glGenBuffers(1, &floorBuffers.EBO);
-
-  glBindVertexArray(floorBuffers.VAO);
-
-  MeshData floorMesh{generateQuad()};
-
-  glBindBuffer(GL_ARRAY_BUFFER, floorBuffers.VBO);
-  glBufferData(GL_ARRAY_BUFFER,
-               // TODO: Perhaps mesh itself should know the size? In this way,
-               // we expose the type of the vertex data, which exposes
-               // internals, and may make changes difficult.
-               floorMesh.vertices.size() * sizeof(Vertex),
-               floorMesh.vertices.data(), GL_STATIC_DRAW);
-
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, floorBuffers.EBO);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-               floorMesh.indices.size() * sizeof(unsigned int),
-               floorMesh.indices.data(), GL_STATIC_DRAW);
-
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
-  glEnableVertexAttribArray(0);
-
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                        (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(1);
-
-  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                        (void *)(6 * sizeof(float)));
-  glEnableVertexAttribArray(2);
-
-  glBindVertexArray(0);
+  Mesh floor{generateQuad()};
 
   glm::mat4 floorModelMatrix{glm::identity<glm::mat4>()};
 
@@ -1023,47 +1112,8 @@ int main() {
 
   /////////////////////////////////////////////////////////////////////////////
 
-  // TODO: Create reusable classes.
-  MeshData lightSourceMesh{
+  Mesh lightSource{
       generateSphere(20.0f, 20.0f, 1.0f, glm::vec3{1.0f, 1.0f, 0.0f})};
-
-  // I think it would be great if i had a class that handles fragment shader,
-  // buffer creation, accepting and passing down uniforms, using the shader
-  // during rendering, ...
-  struct LightSourceBuffers {
-    GLuint VAO, VBO, EBO;
-  };
-
-  LightSourceBuffers lightSourceBuffers;
-
-  glGenVertexArrays(1, &lightSourceBuffers.VAO);
-  glGenBuffers(1, &lightSourceBuffers.VBO);
-  glGenBuffers(1, &lightSourceBuffers.EBO);
-
-  glBindVertexArray(lightSourceBuffers.VAO);
-
-  glBindBuffer(GL_ARRAY_BUFFER, lightSourceBuffers.VBO);
-  glBufferData(GL_ARRAY_BUFFER,
-               lightSourceMesh.vertices.size() * sizeof(Vertex),
-               lightSourceMesh.vertices.data(), GL_STATIC_DRAW);
-
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, lightSourceBuffers.EBO);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-               lightSourceMesh.indices.size() * sizeof(unsigned int),
-               lightSourceMesh.indices.data(), GL_STATIC_DRAW);
-
-  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
-  glEnableVertexAttribArray(0);
-
-  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                        (void *)(3 * sizeof(float)));
-  glEnableVertexAttribArray(1);
-
-  glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                        (void *)(6 * sizeof(float)));
-  glEnableVertexAttribArray(2);
-
-  glBindVertexArray(0);
 
   // TODO: Render light source object. Make light position movable in the world.
   // It should help me understand if light is behaving as expected.
@@ -1085,7 +1135,7 @@ int main() {
 
   // Create framebuffer
   DepthMap depthMap;
-  glGenFramebuffers(1, &depthMap.framebuffer);
+  // Texture
   glGenTextures(1, &depthMap.texture);
 
   // Start describing the texture
@@ -1117,6 +1167,8 @@ int main() {
   // Should be safe to unbind texture?
   glBindTexture(GL_TEXTURE_2D, 0);
 
+  // Framebuffer
+  glGenFramebuffers(1, &depthMap.framebuffer);
   // Start describing the framebuffer
   glBindFramebuffer(GL_FRAMEBUFFER, depthMap.framebuffer);
 
@@ -1133,6 +1185,58 @@ int main() {
   }
 
   // Stop describing the framebuffer
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  /////////////////////////////////////////////////////////////////////////////
+
+  struct PostProcessBuffer {
+    // Frame Buffer Object
+    GLuint framebufferId;
+    GLuint textureId;
+    // Render Buffer Object
+    // RenderBuffer is comparable to texture, or to understand it, i have to
+    // compare it to a texture
+    GLuint renderbufferId;
+  };
+
+  PostProcessBuffer postProcessBuffer;
+
+  // Texture
+  // I should play with textures in a separate example. It takes me too long to
+  // play with some example and later to actually integrate it into the flow.
+  glGenTextures(1, &postProcessBuffer.textureId);
+  glBindTexture(GL_TEXTURE_2D, postProcessBuffer.textureId);
+  // Needs to be resized on window size changes
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, window_width, window_height, 0, GL_RGB,
+               GL_UNSIGNED_BYTE, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glBindTexture(GL_TEXTURE_2D, 0);
+
+  // Renderbuffer
+  glGenRenderbuffers(1, &postProcessBuffer.renderbufferId);
+  glBindRenderbuffer(GL_RENDERBUFFER, postProcessBuffer.renderbufferId);
+  // Depth & Stencil renderbuffer
+  // Needs to be resized on window size changes
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, window_width,
+                        window_height);
+  glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+  // Framebuffer
+  glGenFramebuffers(1, &postProcessBuffer.framebufferId);
+  glBindFramebuffer(GL_FRAMEBUFFER, postProcessBuffer.framebufferId);
+
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         postProcessBuffer.textureId, 0);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                            GL_RENDERBUFFER, postProcessBuffer.renderbufferId);
+
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    std::cerr << "Post-Process Framebuffer is NOT complete!\n";
+  } else {
+    std::cout << "Post-Process Framebuffer IS COMPLETE.\n";
+  }
+
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
   /////////////////////////////////////////////////////////////////////////////
@@ -1317,13 +1421,13 @@ int main() {
     depthProgram.setUniform("u_view", lightMatrix.view);
     depthProgram.setUniform("u_model", modelMatrix);
 
-    glBindVertexArray(cubeBuffers.VAO);
-    glDrawElements(GL_TRIANGLES, cubeMesh.indices.size(), GL_UNSIGNED_INT, 0);
+    cube.bind();
+    glDrawElements(GL_TRIANGLES, cube.indicesCount(), cube.indexType(), 0);
 
     depthProgram.setUniform("u_model", sphereModelMatrix);
 
-    glBindVertexArray(sphereBuffers.VAO);
-    glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
+    sphere.bind();
+    glDrawElements(GL_TRIANGLES, sphere.indicesCount(), sphere.indexType(), 0);
 
     // Revert culling to normal one
     glCullFace(GL_BACK);
@@ -1332,6 +1436,11 @@ int main() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     /* LIGHT PASS */
+
+    // glBindFramebuffer(GL_FRAMEBUFFER, postProcessBuffer.framebufferId);
+
+    // Do i need this here?
+    glEnable(GL_DEPTH_TEST);
 
     glViewport(0, 0, window_width, window_height);
 
@@ -1353,13 +1462,13 @@ int main() {
     shaderProgram.setUniform("u_shadowMap", 1);
     shaderProgram.setUniform("u_model", modelMatrix);
 
-    glBindVertexArray(cubeBuffers.VAO);
-    glDrawElements(GL_TRIANGLES, cubeMesh.indices.size(), GL_UNSIGNED_INT, 0);
+    cube.bind();
+    glDrawElements(GL_TRIANGLES, cube.indicesCount(), cube.indexType(), 0);
 
     shaderProgram.setUniform("u_model", sphereModelMatrix);
 
-    glBindVertexArray(sphereBuffers.VAO);
-    glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
+    sphere.bind();
+    glDrawElements(GL_TRIANGLES, sphere.indicesCount(), sphere.indexType(), 0);
 
     debugShaderProgram.use();
 
@@ -1369,7 +1478,7 @@ int main() {
     // TODO: Figure out if we need to pass these uniforms to this shader
     // program: u_lightProjection, u_lightView, u_shadowMap
 
-    glDrawElements(GL_TRIANGLES, sphereMesh.indices.size(), GL_UNSIGNED_INT, 0);
+    glDrawElements(GL_TRIANGLES, sphere.indicesCount(), sphere.indexType(), 0);
 
     floorProgram.use();
 
@@ -1383,8 +1492,8 @@ int main() {
     // Texture unit 0 is reserved for color/diffuse
     floorProgram.setUniform("u_shadowMap", 1);
 
-    glBindVertexArray(floorBuffers.VAO);
-    glDrawElements(GL_TRIANGLES, floorMesh.indices.size(), GL_UNSIGNED_INT, 0);
+    floor.bind();
+    glDrawElements(GL_TRIANGLES, floor.indicesCount(), floor.indexType(), 0);
 
     lightSourceProgram.use();
 
@@ -1394,14 +1503,30 @@ int main() {
     // TODO: Figure out if we need to pass these uniforms to this shader
     // program: u_lightProjection, u_lightView, u_shadowMap
 
-    glBindVertexArray(lightSourceBuffers.VAO);
-    glDrawElements(GL_TRIANGLES, lightSourceMesh.indices.size(),
-                   GL_UNSIGNED_INT, 0);
+    lightSource.bind();
+    glDrawElements(GL_TRIANGLES, lightSource.indicesCount(),
+                   lightSource.indexType(), 0);
 
-    // Unbind texture and program
+    // Unbind texture
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, 0);
-    glUseProgram(0);
+
+    // glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    /* POST-PROCESSING PASS */
+
+    // glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
+    // glClear(GL_COLOR_BUFFER_BIT);
+    // glDisable(GL_DEPTH_TEST);
+
+    // glBindTexture(GL_TEXTURE_2D, postProcessBuffer.textureId);
+
+    // use post processing program
+
+    // bind the quad vao
+    // draw
+
+    // ...
 
     /* ISSUE RENDER DIRECTIVE */
     SDL_GL_SwapWindow(window);
