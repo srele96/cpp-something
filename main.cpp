@@ -205,11 +205,6 @@ struct Vertex {
   glm::vec3 normal;
 };
 
-struct MeshData {
-  std::vector<Vertex> vertices;
-  std::vector<unsigned int> indices;
-};
-
 Mesh generateCube(float side) {
   float h = side / 2.0f;
 
