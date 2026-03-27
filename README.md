@@ -49,3 +49,34 @@ bear -- g++ main.cpp glad/src/glad.c \
     -Wl,-rpath,'$ORIGIN' \
     -o main && ./main
 ```
+
+### Sublime Text
+
+Open `Tools > Developer > New Syntax` and, copy paste:
+
+The config:
+
+```yml
+%YAML 1.2
+---
+name: C++ (GLSL Embedded)
+file_extensions:
+  - cpp
+  - h
+  - hpp
+scope: source.c++
+extends: Packages/C++/C++.sublime-syntax
+
+contexts:
+  prototype:
+    - match: 'R"glsl\('
+      embed: scope:source.glsl
+      embed_scope: source.glsl.embedded.c++
+      escape: '\)glsl"'
+```
+
+Save it `CTRL + S` as: `C++GLSL.sublime-syntax`.
+
+Then, open the `C++` file and in the bottom right corner find: `C++` and click it, then find `C++ (GLSL Embedded)` and click it.
+
+This should enable syntax highlighting for GLSL C++ embedded strings with `glsl`.

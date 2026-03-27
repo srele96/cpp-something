@@ -643,7 +643,9 @@ public:
 
 namespace ShaderSource {
 
-const std::string computeShadow{R"(
+// Source for `glsl` in c++ raw string literals: https://open.gl/geometry
+
+const std::string computeShadow{R"glsl(
 float computeShadow(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir, sampler2DShadow shadowMap) {
   vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
 
@@ -674,9 +676,9 @@ float computeShadow(vec4 fragPosLightSpace, vec3 normal, vec3 lightDir, sampler2
 
   return shadow;
 }
-)"};
+)glsl"};
 
-const std::string computeColor{R"(
+const std::string computeColor{R"glsl(
 // -----------------------
 // Phong & Lambert shading
 
@@ -711,10 +713,10 @@ struct LightingComponent {
 vec3 computeFragColor(LightingComponent light, vec3 baseColor, float shadow) {
   return baseColor * (light.ambient + shadow * (light.diffuse + light.specular));
 }
-)"};
+)glsl"};
 
 Shader<ShaderType::Vertex> vertexShader{
-    R"(
+    R"glsl(
 #version 330 core
 
 /*{{defines_begin}}*/
@@ -768,10 +770,10 @@ void main() {
   vs_out.vColor = vColor;
 #endif // HAS_GEOMETRY_SHADER
 }
-)"};
+)glsl"};
 
 const Shader<ShaderType::Geometry> geometryShader{
-    R"(
+    R"glsl(
 #version 330 core
 layout (triangles) in;
 layout (line_strip, max_vertices = 6) out;
@@ -808,10 +810,10 @@ void main() {
   drawLine(1);
   drawLine(2);
 }
-)"};
+)glsl"};
 
 const Shader<ShaderType::Fragment> basicFragmentShader{
-    R"(
+    R"glsl(
 #version 330 core
 
 out vec4 FragColor;
@@ -821,14 +823,14 @@ in vec3 vColor;
 void main() {
   FragColor = vec4(vColor, 1.0);
 }
-)"};
+)glsl"};
 
 // TODO: Change computing light direction to accepting uniform light direction.
 // Global illumination is a directional light, not a point light or spotlight.
 // Global light rays do not have a position, only a direction.
 
 Shader<ShaderType::Fragment> fragmentShader{
-    R"(
+    R"glsl(
 #version 330 core
 
 /*{{defines_begin}}*/
@@ -897,7 +899,7 @@ void main() {
 
   FragColor = vec4(fragmentColor, 1.0);
 }
-)",
+)glsl",
     {{"computeColor", computeColor}, //
      {"computeShadow", computeShadow}}};
 
@@ -905,6 +907,41 @@ void main() {
 // This is a simple shader, and allows me to have 3 render passes, at which
 // point i can abstract out the renderer, render pass, framebuffer, into each
 // respective class.
+
+const Shader<ShaderType::Vertex> postProcessingVert{R"glsl(
+#version 330
+
+layout(location = 0) in vec3 aPos;
+
+out vec2 TexCoords;
+
+void main() {
+  gl_Position = vec4(aPos.x, aPos.z, 0.0, 1.0);
+  TexCoords = vec2(aPos.x, aPos.z) * 0.5 + 0.5;
+}
+)glsl"};
+
+const Shader<ShaderType::Fragment> postProcessingFrag{R"glsl(
+#version 330
+
+out vec4 FragColor;
+
+in vec2 TexCoords;
+
+uniform sampler2D u_screenTexture;
+
+void main() {
+  vec3 color = texture(u_screenTexture, TexCoords).rgb;
+
+  // Fade the pixels the further we are from the center of the screen
+  float dist = distance(TexCoords, vec2(0.5, 0.5));
+  float vignette = smoothstep(1.0, 0.2, dist);
+
+  color *= vignette;
+
+  FragColor = vec4(color, 1.0);
+}
+)glsl"};
 
 } // namespace ShaderSource
 
@@ -1083,6 +1120,9 @@ int main() {
 
   ShaderProgram depthProgram{ShaderSource::vertexShader};
 
+  ShaderProgram postProcessingProgram{ShaderSource::postProcessingVert,
+                                      ShaderSource::postProcessingFrag};
+
   /////////////////////////////////////////////////////////////////////////////
 
   Mesh cube{generateCube(4.0f)};
@@ -1120,51 +1160,49 @@ int main() {
 
   /////////////////////////////////////////////////////////////////////////////
 
+  Mesh postProcessingQuad{generateQuad(1.0f)};
+
+  /////////////////////////////////////////////////////////////////////////////
+
   struct DepthMap {
     GLuint framebuffer;
     GLuint texture;
     const unsigned int TEXTURE_WIDTH{2048};
     const unsigned int TEXTURE_HEIGHT{2048};
     const std::array<float, 4> borderColor{1.0f, 1.0f, 1.0f, 1.0f};
+
+    void setTextureSize(const float width, const float height) const noexcept {
+      glBindTexture(GL_TEXTURE_2D, texture);
+      // Store depth component in the texture, and tell graphics driver to give
+      // us higher precision shadows
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, width, height, 0,
+                   GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+      glBindTexture(GL_TEXTURE_2D, 0);
+    }
   };
 
   // Create framebuffer
   DepthMap depthMap;
+
   // Texture
-  glGenTextures(1, &depthMap.texture);
-
-  // Start describing the texture
-  glBindTexture(GL_TEXTURE_2D, depthMap.texture);
-
-  // Store depth component in the texture, and tell graphics driver to give us
-  // higher precision shadows
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, depthMap.TEXTURE_WIDTH,
-               depthMap.TEXTURE_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
-
-  // -- BEGIN -- Required texture parameters for smooth shadow (anti aliasing)
   // https://wikis.khronos.org/opengl/Texture
+  glGenTextures(1, &depthMap.texture);
+  glBindTexture(GL_TEXTURE_2D, depthMap.texture);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE,
                   GL_COMPARE_REF_TO_TEXTURE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
-  // -- END -- Required texture parameters for smooth shadow (anti aliasing)
-
-  // A value thats far out gets border color assigned
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-
-  // A border color value means a light ray hit it and should be lit
   glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR,
                    depthMap.borderColor.data());
-
-  // Stop describing the texture
-  // Should be safe to unbind texture?
   glBindTexture(GL_TEXTURE_2D, 0);
+
+  depthMap.setTextureSize(depthMap.TEXTURE_WIDTH, depthMap.TEXTURE_HEIGHT);
 
   // Framebuffer
   glGenFramebuffers(1, &depthMap.framebuffer);
-  // Start describing the framebuffer
   glBindFramebuffer(GL_FRAMEBUFFER, depthMap.framebuffer);
 
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
@@ -1174,48 +1212,58 @@ int main() {
   glReadBuffer(GL_NONE);
 
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
-    std::cout << "Framebuffer is complete." << std::endl;
+    std::cout << "Depth Framebuffer IS complete." << std::endl;
   } else {
-    std::cout << "Framebuffer not complete!" << std::endl;
+    std::cerr << "Depth Framebuffer is NOT complete!" << std::endl;
   }
 
-  // Stop describing the framebuffer
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
+      GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT) {
+    std::cerr << "Depth Framebuffer incomplete attachment\n";
+  } else {
+    std::cout << "Depth Framebuffer complete attachment\n";
+  }
+
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
   /////////////////////////////////////////////////////////////////////////////
 
   struct PostProcessBuffer {
-    // Frame Buffer Object
     GLuint framebufferId;
     GLuint textureId;
-    // Render Buffer Object
-    // RenderBuffer is comparable to texture, or to understand it, i have to
-    // compare it to a texture
     GLuint renderbufferId;
+
+    void setTextureSize(const float width, const float height) const noexcept {
+      glBindTexture(GL_TEXTURE_2D, textureId);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB,
+                   GL_UNSIGNED_BYTE, NULL);
+      glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    void setRenderbufferSize(const float width,
+                             const float height) const noexcept {
+      glBindRenderbuffer(GL_RENDERBUFFER, renderbufferId);
+      glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width,
+                            height);
+      glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    }
   };
 
   PostProcessBuffer postProcessBuffer;
 
   // Texture
-  // I should play with textures in a separate example. It takes me too long to
-  // play with some example and later to actually integrate it into the flow.
   glGenTextures(1, &postProcessBuffer.textureId);
   glBindTexture(GL_TEXTURE_2D, postProcessBuffer.textureId);
-  // Needs to be resized on window size changes
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, window_width, window_height, 0, GL_RGB,
-               GL_UNSIGNED_BYTE, NULL);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glBindTexture(GL_TEXTURE_2D, 0);
 
+  postProcessBuffer.setTextureSize(window_width, window_height);
+
   // Renderbuffer
   glGenRenderbuffers(1, &postProcessBuffer.renderbufferId);
-  glBindRenderbuffer(GL_RENDERBUFFER, postProcessBuffer.renderbufferId);
-  // Depth & Stencil renderbuffer
-  // Needs to be resized on window size changes
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, window_width,
-                        window_height);
-  glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+  postProcessBuffer.setRenderbufferSize(window_width, window_height);
 
   // Framebuffer
   glGenFramebuffers(1, &postProcessBuffer.framebufferId);
@@ -1226,10 +1274,10 @@ int main() {
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                             GL_RENDERBUFFER, postProcessBuffer.renderbufferId);
 
-  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-    std::cerr << "Post-Process Framebuffer is NOT complete!\n";
-  } else {
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
     std::cout << "Post-Process Framebuffer IS COMPLETE.\n";
+  } else {
+    std::cerr << "Post-Process Framebuffer is NOT complete!\n";
   }
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1290,7 +1338,11 @@ int main() {
       if (event.type == SDL_EVENT_WINDOW_RESIZED) {
         window_width = event.window.data1;
         window_height = event.window.data2;
+
         glViewport(0, 0, window_width, window_height);
+
+        postProcessBuffer.setTextureSize(window_width, window_height);
+        postProcessBuffer.setRenderbufferSize(window_width, window_height);
       }
       if (event.type == SDL_EVENT_MOUSE_MOTION) {
         // TODO: Mathematically check when do the two axes collapse and cause an
@@ -1398,17 +1450,17 @@ int main() {
 
     /* SHADOW PASS */
 
+    glBindFramebuffer(GL_FRAMEBUFFER, depthMap.framebuffer);
+
     // TODO: Make shadows be affected by each light source. Currently only
     // directional light affects shadows.
     glViewport(0, 0, depthMap.TEXTURE_WIDTH, depthMap.TEXTURE_HEIGHT);
 
-    // Use depth framebuffer for this render pass
-    glBindFramebuffer(GL_FRAMEBUFFER, depthMap.framebuffer);
-
-    glClear(GL_DEPTH_BUFFER_BIT);
-
+    glEnable(GL_DEPTH_TEST);
     // Fix shadow acne
     glCullFace(GL_FRONT);
+
+    glClear(GL_DEPTH_BUFFER_BIT);
 
     depthProgram.use();
 
@@ -1427,15 +1479,9 @@ int main() {
     // Revert culling to normal one
     glCullFace(GL_BACK);
 
-    // Unbind depth framebuffer, the render pass is done
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
     /* LIGHT PASS */
 
-    // glBindFramebuffer(GL_FRAMEBUFFER, postProcessBuffer.framebufferId);
-
-    // Do i need this here?
-    glEnable(GL_DEPTH_TEST);
+    glBindFramebuffer(GL_FRAMEBUFFER, postProcessBuffer.framebufferId);
 
     glViewport(0, 0, window_width, window_height);
 
@@ -1506,22 +1552,22 @@ int main() {
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    // glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
     /* POST-PROCESSING PASS */
 
-    // glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
-    // glClear(GL_COLOR_BUFFER_BIT);
-    // glDisable(GL_DEPTH_TEST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // glBindTexture(GL_TEXTURE_2D, postProcessBuffer.textureId);
+    glClearBufferfv(GL_COLOR, 0,
+                    glm::value_ptr(glm::vec4{0.1f, 0.1f, 0.15f, 1.0f}));
+    glDisable(GL_DEPTH_TEST);
 
-    // use post processing program
+    postProcessingProgram.use();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, postProcessBuffer.textureId);
+    postProcessingProgram.setUniform("u_screenTexture", 0);
 
-    // bind the quad vao
-    // draw
-
-    // ...
+    postProcessingQuad.bind();
+    glDrawElements(GL_TRIANGLES, postProcessingQuad.indicesCount(),
+                   postProcessingQuad.indexType(), 0);
 
     /* ISSUE RENDER DIRECTIVE */
     SDL_GL_SwapWindow(window);
