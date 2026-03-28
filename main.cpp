@@ -1045,6 +1045,89 @@ LightMatrix createLightMatrix(const CreateLightMatrixParam &param) {
 }
 } // namespace ShadowMapping
 
+class Camera {
+private:
+  // TODO: Add a way to keep multiple cameras. One which has ability to
+  // rotated freely, and another one with constrained pitch.
+  // TODO: Consider adding camera not capable of flying around.
+
+  glm::vec3 m_forward;
+  glm::vec3 m_right;
+  glm::vec3 m_up;
+
+  glm::vec3 m_eye;
+
+public:
+  Camera()
+      : m_forward{glm::vec3{0.0f, 0.0f, -1.0f}}, //
+        m_right{glm::vec3{1.0f, 0.0f, 0.0f}},    //
+        m_up{glm::vec3{0.0f, 1.0f, 0.0f}},       //
+        m_eye{glm::vec3(0.0f, 0.0f, 0.0f)}       //
+
+  {}
+
+  Camera(glm::vec3 eye)
+      : m_forward{glm::vec3{0.0f, 0.0f, -1.0f}}, //
+        m_right{glm::vec3{1.0f, 0.0f, 0.0f}},    //
+        m_up{glm::vec3{0.0f, 1.0f, 0.0f}},       //
+        m_eye{std::move(eye)}                    //
+  {}
+
+  Camera(glm::vec3 forward, glm::vec3 right, glm::vec3 up, glm::vec3 eye)
+      : m_forward{std::move(forward)}, //
+        m_right{std::move(right)},     //
+        m_up{std::move(up)},           //
+        m_eye{std::move(eye)}          //
+  {}
+
+  void update(const float pitch, const float yaw, const glm::vec3 &worldUp) {
+    // NOTE: The forward direction vector is derived by the following linear
+    // algebra multiplication, where +x is right, and -z is front:
+    // Ry(pitch)*Rx(yaw)*Vec(0,0,-1)
+    // The logic belows essentially implements exactly that for front
+    // vector.
+
+    // NOTE: This direction computation removes the need for static world up
+    // vector, but introduces roll when mouse moves in circles across the
+    // screen. Be aware of this behavior.
+
+    // TODO: Use static UP world axis. Lock (-pi/2 < pitch < pi/2). Avoid
+    // roll effect.
+
+    // NOTE: The camera is always orinted relative to static world up, right
+    // and forward vectors. That way we use absolute yaw and pitch instead
+    // of delta values.
+
+    glm::vec3 forward{0.0f, 0.0f, -1.0f};
+    const glm::vec3 right{1.0f, 0.0f, 0.0f};
+
+    forward = glm::rotate(forward, pitch, right);
+    // TODO: Figure out if i should keep -yaw here, or should this method
+    // receive -yaw
+    forward = glm::rotate(forward, yaw, worldUp);
+
+    m_forward = glm::normalize(forward);
+    m_right = glm::normalize(glm::cross(m_forward, worldUp));
+    m_up = glm::cross(m_right, m_forward);
+  }
+
+  void up(const float speed) { m_eye += m_up * speed; }
+  void down(const float speed) { m_eye -= m_up * speed; }
+  void right(const float speed) { m_eye += m_right * speed; }
+  void left(const float speed) { m_eye -= m_right * speed; }
+  void forward(const float speed) { m_eye += m_forward * speed; }
+  void backward(const float speed) { m_eye -= m_forward * speed; }
+
+  const glm::vec3 &eye() const { return m_eye; }
+
+  glm::mat4 viewMatrix(const glm::vec3 &worldUp) const {
+    return glm::lookAt(
+        m_eye,
+        // Cancel out the eye vector to form a free look at matrix
+        m_eye + m_forward, worldUp);
+  }
+};
+
 // TODO: Generate distortion over a plane. This is where we can practically
 // apply calculus.
 
@@ -1297,8 +1380,6 @@ int main() {
   float yaw = 0.0f;
   float pitch = 0.0f;
 
-  glm::vec3 eye{0.0f, 5.0f, 0.0f};
-
   const float sensitivity = 0.05f;
 
   glm::mat4 modelMatrix{1.0f};
@@ -1317,18 +1398,9 @@ int main() {
 
   const float velocity{10.0f};
 
-  // TODO: Add a way to keep multiple cameras. One which has ability to rotated
-  // freely, and another one with constrained pitch.
-  // TODO: Consider adding camera not capable of flying around.
-  struct Look {
-    glm::vec3 forward{0.0f, 0.0f, -1.0f};
-    glm::vec3 right{1.0f, 0.0f, 0.0f};
-    glm::vec3 up{0.0f, 1.0f, 0.0f};
-  };
-
   glm::vec3 worldUp{0.0f, 1.0f, 0.0f};
 
-  Look look;
+  Camera camera{glm::vec3{0.0f, 5.0f, 0.0f}};
 
   while (running) {
     while (SDL_PollEvent(&event)) {
@@ -1367,31 +1439,7 @@ int main() {
           pitch = -89.0f;
         }
 
-        // NOTE: The forward direction vector is derived by the following linear
-        // algebra multiplication, where +x is right, and -z is front:
-        // Ry(pitch)*Rx(yaw)*Vec(0,0,-1)
-        // The logic belows essentially implements exactly that for front
-        // vector.
-
-        // NOTE: This direction computation removes the need for static world up
-        // vector, but introduces roll when mouse moves in circles across the
-        // screen. Be aware of this behavior.
-
-        // TODO: Use static UP world axis. Lock (-pi/2 < pitch < pi/2). Avoid
-        // roll effect.
-
-        // NOTE: The camera is always orinted relative to static world up, right
-        // and forward vectors. That way we use absolute yaw and pitch instead
-        // of delta values.
-        glm::vec3 forward{0.0f, 0.0f, -1.0f};
-        const glm::vec3 right{1.0f, 0.0f, 0.0f};
-
-        forward = glm::rotate(forward, glm::radians(pitch), right);
-        forward = glm::rotate(forward, glm::radians(-yaw), worldUp);
-
-        look.forward = glm::normalize(forward);
-        look.right = glm::normalize(glm::cross(look.forward, worldUp));
-        look.up = glm::normalize(glm::cross(look.right, look.forward));
+        camera.update(glm::radians(pitch), -glm::radians(yaw), worldUp);
       }
     }
 
@@ -1409,28 +1457,25 @@ int main() {
     // SDL_PumpEvents();
     const bool *keystate = SDL_GetKeyboardState(NULL);
     if (keystate[SDL_SCANCODE_W]) {
-      eye += look.forward * speed;
+      camera.forward(speed);
     }
     if (keystate[SDL_SCANCODE_S]) {
-      eye -= look.forward * speed;
+      camera.backward(speed);
     }
     if (keystate[SDL_SCANCODE_A]) {
-      eye -= look.right * speed;
+      camera.left(speed);
     }
     if (keystate[SDL_SCANCODE_D]) {
-      eye += look.right * speed;
+      camera.right(speed);
     }
     if (keystate[SDL_SCANCODE_SPACE]) {
-      eye += look.up * speed;
+      camera.up(speed);
     }
     if (keystate[SDL_SCANCODE_LCTRL]) {
-      eye -= look.up * speed;
+      camera.down(speed);
     }
 
-    glm::mat4 viewMatrix{
-        glm::lookAt(eye,
-                    // Cancel out the eye vector to form a free look at matrix
-                    eye + look.forward, worldUp)};
+    glm::mat4 viewMatrix{camera.viewMatrix(worldUp)};
 
     const float fov{glm::radians(60.0f)};
     const float aspectRatio{window_width / window_height};
@@ -1495,7 +1540,7 @@ int main() {
 
     shaderProgram.setUniform("u_projection", projectionMatrix);
     shaderProgram.setUniform("u_view", viewMatrix);
-    shaderProgram.setUniform("u_eyePosition", eye);
+    shaderProgram.setUniform("u_eyePosition", camera.eye());
     shaderProgram.setUniform("u_lightPosition", lightPosition);
     shaderProgram.setUniform("u_lightProjection", lightMatrix.projection);
     shaderProgram.setUniform("u_lightView", lightMatrix.view);
@@ -1526,7 +1571,7 @@ int main() {
     floorProgram.setUniform("u_projection", projectionMatrix);
     floorProgram.setUniform("u_view", viewMatrix);
     floorProgram.setUniform("u_model", floorModelMatrix);
-    floorProgram.setUniform("u_eyePosition", eye);
+    floorProgram.setUniform("u_eyePosition", camera.eye());
     floorProgram.setUniform("u_lightPosition", lightPosition);
     floorProgram.setUniform("u_lightProjection", lightMatrix.projection);
     floorProgram.setUniform("u_lightView", lightMatrix.view);
