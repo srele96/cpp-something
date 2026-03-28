@@ -844,7 +844,7 @@ in vec4 vFragPosLightSpace;
 out vec4 FragColor;
 
 uniform vec3 u_eyePosition;
-uniform vec3 u_lightPosition;
+uniform vec3 u_lightDirection;
 uniform sampler2DShadow u_shadowMap;
 
 {{computeShadow}}
@@ -882,7 +882,8 @@ void main() {
 
   vec3 lightColor = vec3(1.0, 0.98, 0.9);
 
-  vec3 lightDirection = normalize(u_lightPosition - vFragPos);
+  // From fragment to the directional light source
+  vec3 lightDirection = -u_lightDirection;
   vec3 lightReflection = reflect(-lightDirection, normal);
   vec3 eyeDirection = normalize(u_eyePosition - vFragPos);
 
@@ -1235,7 +1236,7 @@ int main() {
 
   // TODO: Render light source object. Make light position movable in the world.
   // It should help me understand if light is behaving as expected.
-  glm::vec3 lightPosition{0.0f, 40.0f, -10.0f};
+  glm::vec3 lightPosition{-10.0f, 10.0f, -10.0f};
 
   glm::mat4 lightSourceModelMatrix{glm::identity<glm::mat4>()};
   lightSourceModelMatrix =
@@ -1541,7 +1542,7 @@ int main() {
     shaderProgram.setUniform("u_projection", projectionMatrix);
     shaderProgram.setUniform("u_view", viewMatrix);
     shaderProgram.setUniform("u_eyePosition", camera.eye());
-    shaderProgram.setUniform("u_lightPosition", lightPosition);
+    shaderProgram.setUniform("u_lightDirection", lightDirection);
     shaderProgram.setUniform("u_lightProjection", lightMatrix.projection);
     shaderProgram.setUniform("u_lightView", lightMatrix.view);
     // Texture unit 0 is reserved for color/diffuse
@@ -1572,7 +1573,7 @@ int main() {
     floorProgram.setUniform("u_view", viewMatrix);
     floorProgram.setUniform("u_model", floorModelMatrix);
     floorProgram.setUniform("u_eyePosition", camera.eye());
-    floorProgram.setUniform("u_lightPosition", lightPosition);
+    floorProgram.setUniform("u_lightDirection", lightDirection);
     floorProgram.setUniform("u_lightProjection", lightMatrix.projection);
     floorProgram.setUniform("u_lightView", lightMatrix.view);
     // Texture unit 0 is reserved for color/diffuse
