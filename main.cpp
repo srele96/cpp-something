@@ -913,6 +913,11 @@ uniform mat4 u_lightView;
 
 // TODO: Normal, Tangent, Bitangent (Allow us to apply Finite Difference method on any position)
 // We can not do vertex displacement without Tangent, Bitangent, Normal data (to compute new normal)
+//
+// NOTE: We can use GLSL partial derivatives to guess/approximate UV coordinate
+// vec3 dPdx = dFdx(FragPos);
+// vec3 dPdy = dFdy(FragPos);
+// vec2 dUdx = dFdx(vec2(FragPos.x, FragPos.z)); // Guessing a UV
 
 void main() {
   vec4 worldPosition = u_model * vec4(aPos, 1.0);
