@@ -283,6 +283,8 @@ glm::vec3 sphericalCoord(const float yaw, const float pitch,
   return r * coord;
 }
 
+// TODO: Figure out if it's beneficial to refactor this function to use
+// generateMesh
 Mesh generateSphere(const int latitudeBands, const int longitudeBands,
                     const float r = 1,
                     const glm::vec3 &color = {1.0f, 1.0f, 1.0f}) {
@@ -375,122 +377,163 @@ Mesh generateQuad(const float edge = 0.5f) {
   return mesh;
 }
 
-Mesh generateCylinder(const int rings = 4, const int circularPoints = 32,
-                      const float units = 1.0f) {
-  std::vector<Vertex> vertices;
+using UVMapCallback = std::function<void(const float, const float)>;
 
-  const float arc{(2.0f * glm::pi<float>()) /
-                  static_cast<float>(circularPoints)};
+void generateUVMap(const int uSteps, const int vSteps,
+                   const UVMapCallback &callback) {
+  for (int i{0}; i < uSteps; ++i) {
+    for (int j{0}; j < vSteps; ++j) {
+      const float u{static_cast<float>(i) / static_cast<float>(uSteps - 1)};
+      const float v{static_cast<float>(j) / static_cast<float>(vSteps - 1)};
 
-  const glm::vec3 white{1.0f, 1.0f, 1.0f};
+      callback(u, v);
+    }
+  }
+}
 
-  // Insert vertices
-  for (int i{0}; i < circularPoints; ++i) {
-    for (int j{0}; j < rings; ++j) {
-      const float normalizedJ{static_cast<float>(j) /
-                              static_cast<float>(rings - 1)};
-      const float z{(normalizedJ - 0.5f) * units};
-      const float angle{i * arc};
+struct UVIndexParam {
+  uint32_t topLeft;
+  uint32_t topRight;
+  uint32_t bottomLeft;
+  uint32_t bottomRight;
+};
 
-      const glm::vec3 position{glm::cos(angle), glm::sin(angle), z};
-      const glm::vec3 center{0.0f, 0.0f, z};
+using UVMapIndexCallback = std::function<void(UVIndexParam)>;
 
-      vertices.push_back({
-          .pos = glm::vec3{glm::cos(angle), glm::sin(angle), z},
-          .color = white,
-          .normal = glm::normalize(position - center),
+// NOTE: To wrap the grid, generate 1 more row or column (whichever expects
+// wrapping)
+void generateUVMapIndices(const int uSteps, const int vSteps,
+                          const UVMapIndexCallback &callback) {
+  for (int i{0}; i < uSteps - 1; ++i) {
+    for (int j{0}; j < vSteps - 1; ++j) {
+      const int nextI{(i + 1)};
+      const int nextJ{(j + 1)};
+
+      const uint32_t topLeft{static_cast<uint32_t>(i * vSteps + j)};
+      const uint32_t topRight{static_cast<uint32_t>(i * vSteps + nextJ)};
+      const uint32_t bottomLeft{static_cast<uint32_t>(nextI * vSteps + j)};
+      const uint32_t bottomRight{static_cast<uint32_t>(nextI * vSteps + nextJ)};
+
+      callback({
+          .topLeft = topLeft,
+          .topRight = topRight,
+          .bottomLeft = bottomLeft,
+          .bottomRight = bottomRight,
       });
     }
   }
+}
 
-  // TODO: Refactor `unsigned int` to `uint32_t`
+Vertex generateCylinderVertex(const float u, const float v) {
+  std::vector<Vertex> vertices;
+  const float angle{u * 2.0f * glm::pi<float>()};
+  const float z{v - 0.5f};
+
+  glm::vec3 position{glm::cos(angle), glm::sin(angle), z};
+  const glm::vec3 center{0.0f, 0.0f, z};
+  glm::vec3 normal{glm::normalize(position - center)};
+  glm::vec3 color{1.0f, 1.0f, 1.0f};
+
+  return {
+      .pos = std::move(position),
+      .color = std::move(color),
+      .normal = std::move(normal),
+  };
+}
+
+// TODO: Scaling cylinder length reduces curvature. Allow curvature to be
+// size-relative so stretching does not stretch out the curve.
+// TODO: Allow larger than unit length cylinders.
+Vertex generateWavyCylinderVertex(const float u, const float v) {
+  std::vector<Vertex> vertices;
+  const float angle{u * 2.0f * glm::pi<float>()};
+  const float z{v - 0.5f};
+
+  glm::vec3 position{
+      glm::cos(angle),                                         //
+      glm::sin(z * 2.0f * glm::pi<float>()) + glm::sin(angle), //
+      z                                                        //
+  };
+  // Analytical Partial Derivative of the position parametric function
+  glm::vec3 d_angle{
+      -glm::sin(angle), //
+      glm::cos(angle),  //
+      0.0               //
+  };
+  glm::vec3 d_z{
+      0.0f,                                                            //
+      2.0f * glm::pi<float>() * glm::cos(z * 2.0f * glm::pi<float>()), //
+      1.0f                                                             //
+  };
+  glm::vec3 normal{glm::normalize(glm::cross(d_angle, d_z))};
+  glm::vec3 color{1.0f, 1.0f, 1.0f};
+
+  return {
+      .pos = std::move(position),
+      .color = std::move(color),
+      .normal = std::move(normal),
+  };
+}
+
+Vertex generateTorusVertex(const float u, const float v) {
+  const float theta{u * 2.0f * glm::pi<float>()};
+  const float phi{v * 2.0f * glm::pi<float>()};
+  const float z{v - 0.5f};
+
+  // TODO: Configurable parameters, make radius configurable.
+  const float ringRadius{1.0f};
+  const float torusRadius{4.0f};
+
+  glm::vec3 position{ringRadius * glm::cos(theta), ringRadius * glm::sin(theta),
+                     0.0f};
+  glm::mat4 model{glm::identity<glm::mat4>()};
+  model = glm::rotate(model, phi, glm::vec3{0.0f, 1.0f, 0.0f});
+  model = glm::translate(model, glm::vec3{torusRadius, 0.0f, 0.0f});
+  position = glm::vec3{model * glm::vec4{position, 1.0f}};
+  const glm::vec3 center{model * glm::vec4{0.0f, 0.0f, 0.0, 1.0f}};
+  glm::vec3 normal{glm::normalize(position - center)};
+
+  glm::vec3 color{1.0f, 1.0f, 1.0f};
+
+  return {.pos = std::move(position),
+          .color = std::move(color),
+          .normal = std::move(normal)};
+}
+
+// TODO: Add disc generator
+
+using GenerateMeshCallback = std::function<Vertex(const float, const float)>;
+
+// TODO: Consider Finite Difference method in case of more geometry
+Mesh generateMesh(const GenerateMeshCallback &callback, const int uSteps = 32,
+                  const int vSteps = 32) {
+  std::vector<Vertex> vertices;
+
+  const int uCount{uSteps + 1};
+
+  generateUVMap(uCount, vSteps,
+                [&vertices, &callback](const float u, const float v) {
+                  vertices.push_back(callback(u, v));
+                });
+
   std::vector<uint32_t> indices;
 
-  // Insert indices
-  for (int i{0}; i < circularPoints; ++i) {
-    for (int j{0}; j < rings - 1; ++j) {
-      const int rowStride{rings};
-      // Connect last and first row
-      const int nextRow{(i + 1) % circularPoints};
-
-      const int topLeft{i * rowStride + j};
-      const int topRight{topLeft + 1};
-      const int bottomLeft{nextRow * rowStride + j};
-      const int bottomRight{bottomLeft + 1};
-
-      indices.push_back(topLeft);
-      indices.push_back(topRight);
-      indices.push_back(bottomLeft);
-
-      indices.push_back(topRight);
-      indices.push_back(bottomRight);
-      indices.push_back(bottomLeft);
-    }
-  }
-
-  const float halfUnits{units / 2.0f};
-
-  const int fontCapCenterIdx{static_cast<int>(vertices.size())};
-
-  // Insert front cap center vertex
-  const glm::vec3 frontCapNormal{0.0f, 0.0f, -1.0f};
-  vertices.push_back({
-      .pos = glm::vec3{0.0f, 0.0f, -halfUnits},
-      .color = white,
-      .normal = frontCapNormal,
+  generateUVMapIndices(uCount, vSteps, [&indices](const auto idxParam) {
+    indices.push_back(idxParam.topLeft);
+    indices.push_back(idxParam.topRight);
+    indices.push_back(idxParam.bottomLeft);
+    indices.push_back(idxParam.bottomLeft);
+    indices.push_back(idxParam.topRight);
+    indices.push_back(idxParam.bottomRight);
   });
-
-  const int backCapCenterIdx{static_cast<int>(vertices.size())};
-
-  // Insert back cap center vertex
-  const glm::vec3 backCapNormal{0.0f, 0.0f, 1.0f};
-  vertices.push_back({
-      .pos = glm::vec3{0.0f, 0.0f, halfUnits},
-      .color = white,
-      .normal = backCapNormal,
-  });
-
-  // Insert front ring vertices
-  const int frontRingStartIdx{static_cast<int>(vertices.size())};
-  for (int i{0}; i < circularPoints; ++i) {
-    const float angle{i * arc};
-    vertices.push_back({
-        .pos = glm::vec3{glm::cos(angle), glm::sin(angle), -halfUnits},
-        .color = white,
-        .normal = frontCapNormal,
-    });
-  }
-
-  // Insert back ring vertices
-  const int backRingStartIdx{static_cast<int>(vertices.size())};
-  for (int i{0}; i < circularPoints; ++i) {
-    const float angle{i * arc};
-    vertices.push_back({
-        .pos = glm::vec3{glm::cos(angle), glm::sin(angle), halfUnits},
-        .color = white,
-        .normal = backCapNormal,
-    });
-  }
-
-  // Insert front & back cap indices
-  for (int i{0}; i < circularPoints; ++i) {
-    const int nextRingIdx{(i + 1) % circularPoints};
-
-    indices.push_back(frontRingStartIdx + i);
-    indices.push_back(frontRingStartIdx + nextRingIdx);
-    indices.push_back(fontCapCenterIdx);
-
-    indices.push_back(backRingStartIdx + i);
-    indices.push_back(backRingStartIdx + nextRingIdx);
-    indices.push_back(backCapCenterIdx);
-  }
 
   VertexLayout layout;
+
   layout.push<float>(3);
   layout.push<float>(3);
   layout.push<float>(3);
 
-  return {vertices, indices, layout};
+  return {std::move(vertices), std::move(indices), std::move(layout)};
 }
 
 std::string loadShaderSource(const std::string &filePath) {
@@ -868,6 +911,9 @@ uniform mat4 u_model;
 uniform mat4 u_lightProjection;
 uniform mat4 u_lightView;
 
+// TODO: Normal, Tangent, Bitangent (Allow us to apply Finite Difference method on any position)
+// We can not do vertex displacement without Tangent, Bitangent, Normal data (to compute new normal)
+
 void main() {
   vec4 worldPosition = u_model * vec4(aPos, 1.0);
 
@@ -946,10 +992,6 @@ void main() {
 }
 )glsl"};
 
-// TODO: Change computing light direction to accepting uniform light direction.
-// Global illumination is a directional light, not a point light or spotlight.
-// Global light rays do not have a position, only a direction.
-
 Shader<ShaderType::Fragment> fragmentShader{
     R"glsl(
 #version 330 core
@@ -1024,11 +1066,6 @@ void main() {
 )glsl",
     {{"computeColor", computeColor}, //
      {"computeShadow", computeShadow}}};
-
-// TODO: Add post-processing shader for Vignette and Grayscale
-// This is a simple shader, and allows me to have 3 render passes, at which
-// point i can abstract out the renderer, render pass, framebuffer, into each
-// respective class.
 
 const Shader<ShaderType::Vertex> postProcessingVert{R"glsl(
 #version 330
@@ -1235,6 +1272,8 @@ public:
 
   void up(const float speed) { m_eye += m_up * speed; }
   void down(const float speed) { m_eye -= m_up * speed; }
+  // TODO: BUG - Sometimes camera moving sideways becomes slower than
+  // forward/backward movement
   void right(const float speed) { m_eye += m_right * speed; }
   void left(const float speed) { m_eye -= m_right * speed; }
   void forward(const float speed) { m_eye += m_forward * speed; }
@@ -1389,13 +1428,32 @@ int main() {
 
   // ----
 
-  Mesh cylinder{generateCylinder(10, 32, 1.0f)};
+  Mesh cylinder{generateMesh(generateCylinderVertex)};
 
   glm::mat4 cylinderModelMatrix{glm::identity<glm::mat4>()};
   cylinderModelMatrix =
       glm::translate(cylinderModelMatrix, glm::vec3{10.0f, 5.0f, -10.0f});
   cylinderModelMatrix =
       glm::scale(cylinderModelMatrix, glm::vec3{1.0f, 1.0f, 4.0f});
+
+  // ----
+
+  Mesh wavyCylinder{generateMesh(generateWavyCylinderVertex)};
+  glm::mat4 wavyCylinderModelMatrix{glm::identity<glm::mat4>()};
+  wavyCylinderModelMatrix =
+      glm::translate(wavyCylinderModelMatrix, glm::vec3{20.0f, 3.0f, -15.0f});
+  wavyCylinderModelMatrix =
+      glm::rotate(wavyCylinderModelMatrix, glm::pi<float>() / 2.0f,
+                  glm::vec3{0.0f, 1.0f, 0.0f});
+  wavyCylinderModelMatrix =
+      glm::scale(wavyCylinderModelMatrix, glm::vec3{1.0f, 1.0f, 8.0f});
+
+  // ----
+
+  Mesh torus{generateMesh(generateTorusVertex)};
+  glm::mat4 torusModelMatrix{glm::identity<glm::mat4>()};
+  torusModelMatrix =
+      glm::translate(torusModelMatrix, glm::vec3{20.0f, 8.0f, -25.0f});
 
   // ----
 
@@ -1669,6 +1727,15 @@ int main() {
     glDrawElements(GL_TRIANGLES, cylinder.indicesCount(), cylinder.indexType(),
                    0);
 
+    depthProgram.setUniform("u_model", wavyCylinderModelMatrix);
+    wavyCylinder.bind();
+    glDrawElements(GL_TRIANGLES, wavyCylinder.indicesCount(),
+                   wavyCylinder.indexType(), 0);
+
+    depthProgram.setUniform("u_model", torusModelMatrix);
+    torus.bind();
+    glDrawElements(GL_TRIANGLES, torus.indicesCount(), torus.indexType(), 0);
+
     // Revert culling to normal one
     glCullFace(GL_BACK);
 
@@ -1709,6 +1776,15 @@ int main() {
     cylinder.bind();
     glDrawElements(GL_TRIANGLES, cylinder.indicesCount(), cylinder.indexType(),
                    0);
+
+    shaderProgram.setUniform("u_model", wavyCylinderModelMatrix);
+    wavyCylinder.bind();
+    glDrawElements(GL_TRIANGLES, wavyCylinder.indicesCount(),
+                   wavyCylinder.indexType(), 0);
+
+    shaderProgram.setUniform("u_model", torusModelMatrix);
+    torus.bind();
+    glDrawElements(GL_TRIANGLES, torus.indicesCount(), torus.indexType(), 0);
 
     debugShaderProgram.use();
 
