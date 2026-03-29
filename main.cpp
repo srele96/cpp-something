@@ -429,6 +429,7 @@ Mesh generateCylinder(const int rings = 4, const int circularPoints = 32,
   }
 
   const float halfUnits{units / 2.0f};
+
   const int fontCapCenterIdx{static_cast<int>(vertices.size())};
 
   // Insert front cap center vertex
@@ -1302,6 +1303,8 @@ int main() {
   ShaderProgram shaderProgram{ShaderSource::vertexShader,
                               ShaderSource::fragmentShader};
 
+  // ----
+
   ShaderSource::vertexShader.insertDefines({"HAS_GEOMETRY_SHADER"});
   ShaderProgram debugShaderProgram{
       ShaderSource::vertexShader,       //
@@ -1310,10 +1313,14 @@ int main() {
   };
   ShaderSource::vertexShader.clearDefines();
 
+  // ----
+
   ShaderProgram lightSourceProgram{
       ShaderSource::vertexShader,       //
       ShaderSource::basicFragmentShader //
   };
+
+  // ----
 
   ShaderSource::fragmentShader.insertDefines({"COMPUTE_CHECKER"});
   ShaderProgram floorProgram{
@@ -1322,55 +1329,69 @@ int main() {
   };
   ShaderSource::fragmentShader.clearDefines();
 
+  // ----
+
   ShaderProgram depthProgram{ShaderSource::vertexShader};
+
+  // ----
 
   ShaderProgram postProcessingProgram{ShaderSource::postProcessingVert,
                                       ShaderSource::postProcessingFrag};
 
   /////////////////////////////////////////////////////////////////////////////
 
+  /* MESH */
+
   Mesh cube{generateCube(4.0f)};
 
-  /////////////////////////////////////////////////////////////////////////////
+  glm::mat4 cubemodelMatrix{1.0f};
+  // TRS rule of thumb
+  // Position = M_Translate * M_Rotate * M_Scale * V_Position
+  cubemodelMatrix =
+      glm::translate(cubemodelMatrix, glm::vec3(0.0f, 4.0f, -10.0f));
+  cubemodelMatrix = glm::rotate(cubemodelMatrix, glm::pi<float>() / 6,
+                                glm::vec3(1.0f, 0.0f, 0.0f));
 
-  const int latitudeBands{30};
-  const int longitudeBands{30};
-  Mesh sphere{generateSphere(latitudeBands, longitudeBands, 8.0f)};
+  // ----
 
-  /////////////////////////////////////////////////////////////////////////////
+  Mesh sphere{generateSphere(30, 30, 8.0f)};
+
+  glm::mat4 sphereModelMatrix{glm::translate(glm::identity<glm::mat4>(),
+                                             glm::vec3(0.0f, 8.0f, -25.0f))};
+
+  // ----
 
   Mesh floor{generateQuad()};
 
   glm::mat4 floorModelMatrix{glm::identity<glm::mat4>()};
-
   // TODO: I wonder why is 100 units not enough to cover the whole frustum? The
   // far variable is 100 units, so... Update: The front of the floor is half of
   // the full length of the frustum.
   floorModelMatrix =
       glm::scale(floorModelMatrix, glm::vec3(200.0f, 1.0f, 200.0f));
 
-  /////////////////////////////////////////////////////////////////////////////
+  // ----
 
   Mesh lightSource{
       generateSphere(20.0f, 20.0f, 1.0f, glm::vec3{1.0f, 1.0f, 0.0f})};
 
-  // TODO: Render light source object. Make light position movable in the world.
-  // It should help me understand if light is behaving as expected.
-  glm::vec3 lightPosition{-10.0f, 10.0f, -10.0f};
-
+  // TODO: Render point light & spotlight.
+  // TODO: Make light source movable.
   glm::mat4 lightSourceModelMatrix{glm::identity<glm::mat4>()};
   lightSourceModelMatrix =
-      glm::translate(lightSourceModelMatrix, lightPosition);
-  /////////////////////////////////////////////////////////////////////////////
+      glm::translate(lightSourceModelMatrix, glm::vec3{-10.0f, 10.0f, -10.0f});
+
+  // ----
 
   Mesh cylinder{generateCylinder(10, 32, 1.0f)};
+
   glm::mat4 cylinderModelMatrix{glm::identity<glm::mat4>()};
   cylinderModelMatrix =
       glm::translate(cylinderModelMatrix, glm::vec3{10.0f, 5.0f, -10.0f});
   cylinderModelMatrix =
       glm::scale(cylinderModelMatrix, glm::vec3{1.0f, 1.0f, 4.0f});
 
-  /////////////////////////////////////////////////////////////////////////////
+  // ----
 
   Mesh postProcessingQuad{generateQuad(1.0f)};
 
@@ -1393,7 +1414,6 @@ int main() {
     }
   };
 
-  // Create framebuffer
   DepthMap depthMap;
 
   // Texture
@@ -1510,17 +1530,6 @@ int main() {
   float pitch = 0.0f;
 
   const float sensitivity = 0.05f;
-
-  glm::mat4 modelMatrix{1.0f};
-  const float angle = glm::pi<float>() / 6;
-
-  // TRS rule of thumb
-  // Position = M_Translate * M_Rotate * M_Scale * V_Position
-  modelMatrix = glm::translate(modelMatrix, glm::vec3(0.0f, 4.0f, -10.0f));
-  modelMatrix = glm::rotate(modelMatrix, angle, glm::vec3(1.0f, 0.0f, 0.0f));
-
-  glm::mat4 sphereModelMatrix{glm::translate(glm::identity<glm::mat4>(),
-                                             glm::vec3(0.0f, 8.0f, -25.0f))};
 
   Uint64 lastTime{SDL_GetTicks()};
   float deltaTime{0.0f};
@@ -1641,7 +1650,7 @@ int main() {
     depthProgram.setUniform("u_projection", lightMatrix.projection);
     depthProgram.setUniform("u_view", lightMatrix.view);
 
-    depthProgram.setUniform("u_model", modelMatrix);
+    depthProgram.setUniform("u_model", cubemodelMatrix);
     cube.bind();
     glDrawElements(GL_TRIANGLES, cube.indicesCount(), cube.indexType(), 0);
 
@@ -1679,7 +1688,8 @@ int main() {
     shaderProgram.setUniform("u_lightView", lightMatrix.view);
     // Texture unit 0 is reserved for color/diffuse
     shaderProgram.setUniform("u_shadowMap", 1);
-    shaderProgram.setUniform("u_model", modelMatrix);
+
+    shaderProgram.setUniform("u_model", cubemodelMatrix);
 
     cube.bind();
     glDrawElements(GL_TRIANGLES, cube.indicesCount(), cube.indexType(), 0);
