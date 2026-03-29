@@ -1255,6 +1255,12 @@ public:
 
 // TODO: Generate cylider, sinusoidal and cosinusoidal cylidern.
 
+// TODO: Add one point light illumination.
+
+// TODO: Add point light shadow mapping.
+
+// TODO: Add deffered shading after one point light illumination.
+
 int main() {
   /////////////////////////////////////////////////////////////////////////////
 
