@@ -72,10 +72,10 @@ public:
         .size = size,
         .type = GLVertexTraits<T>::type,
         .normalized = normalized,
-        // Why do we assign offset per each to be m_stride
         .offset = m_stride,
     });
 
+    // Compute offset so far
     m_stride += size * sizeof(T);
     ++m_currentIndex;
   }
@@ -217,8 +217,6 @@ Mesh generateCube(float side) {
 
   glm::vec3 white{1.0f, 1.0f, 1.0f};
 
-  // TODO: Play with math here to understand ins and outs of how and why this
-  // works.
   std::vector<Face> faces = {
       {{0, 0, 1}, {1, 0, 0}, {0, 1, 0}, white},   // Front
       {{0, 0, -1}, {-1, 0, 0}, {0, 1, 0}, white}, // Back
@@ -252,15 +250,12 @@ Mesh generateCube(float side) {
     // Add face indices
     unsigned int offset = i * 4;
 
-    // Does the order of indices matter?
     indices.push_back(offset + 0);
     indices.push_back(offset + 1);
     indices.push_back(offset + 2);
-    // What if we have more or less indices?
     indices.push_back(offset + 2);
     indices.push_back(offset + 3);
     indices.push_back(offset + 0);
-    // How many triangles can we render from 4 vertices?
   }
 
   VertexLayout layout;
