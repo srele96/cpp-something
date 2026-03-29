@@ -1300,6 +1300,10 @@ public:
 
 // TODO: Add deffered shading after one point light illumination.
 
+// TODO: Implement deffered shading, clustered shading, forward+ shading.
+// Implement all 3 of them. Compare them. Provide a way to
+// store/configure/choose/switch shading implementation. Forward+ and Clustered
+// shading can be implemented on CPU instead of compute shaders.
 int main() {
   /////////////////////////////////////////////////////////////////////////////
 
