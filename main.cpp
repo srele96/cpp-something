@@ -1444,6 +1444,7 @@ int main() {
   // ----
 
   Mesh wavyCylinder{generateMesh(generateWavyCylinderVertex)};
+
   glm::mat4 wavyCylinderModelMatrix{glm::identity<glm::mat4>()};
   wavyCylinderModelMatrix =
       glm::translate(wavyCylinderModelMatrix, glm::vec3{20.0f, 3.0f, -15.0f});
@@ -1456,6 +1457,7 @@ int main() {
   // ----
 
   Mesh torus{generateMesh(generateTorusVertex)};
+
   glm::mat4 torusModelMatrix{glm::identity<glm::mat4>()};
   torusModelMatrix =
       glm::translate(torusModelMatrix, glm::vec3{20.0f, 8.0f, -25.0f});
