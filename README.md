@@ -4,11 +4,15 @@
 
 - Render light source
 - Add another camera (abstract camera system)
-- Cylinder, Sinusoidal cylinder, Cosinusoidal cylinder
+- Sinusoidal cylinder, Cosinusoidal cylinder
 - Textures
-- Shadow mapping
 - A library of primitives and render more complex shapes (a world)
 - Post-Processing: Bloom effect to the light source
+- Decide on one (or more) light rendering techniques
+  - Deffered Shading
+  - Forward+ (compute shaders required, the screen is split into 16x16 tiles grid)
+  - Forward rendering (Simple)
+  - Clustered shading (Frustum is split into 3d-like voxel clusters)
 
 ## Docs
 

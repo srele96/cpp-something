@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
 #include <functional>
 #include <initializer_list>
@@ -114,6 +115,8 @@ private:
   }
 
 public:
+  // TODO: Default constructor, no parameters
+  // TODO: Add getter/setter for vertices & indices.
   template <typename VertexType, typename IndexType>
   Mesh(const std::vector<VertexType> &vertices,
        const std::vector<IndexType> &indices, const VertexLayout &layout) {
@@ -370,6 +373,123 @@ Mesh generateQuad(const float edge = 0.5f) {
   Mesh mesh{vertices, indices, layout};
 
   return mesh;
+}
+
+Mesh generateCylinder(const int rings = 4, const int circularPoints = 32,
+                      const float units = 1.0f) {
+  std::vector<Vertex> vertices;
+
+  const float arc{(2.0f * glm::pi<float>()) /
+                  static_cast<float>(circularPoints)};
+
+  const glm::vec3 white{1.0f, 1.0f, 1.0f};
+
+  // Insert vertices
+  for (int i{0}; i < circularPoints; ++i) {
+    for (int j{0}; j < rings; ++j) {
+      const float normalizedJ{static_cast<float>(j) /
+                              static_cast<float>(rings - 1)};
+      const float z{(normalizedJ - 0.5f) * units};
+      const float angle{i * arc};
+
+      const glm::vec3 position{glm::cos(angle), glm::sin(angle), z};
+      const glm::vec3 center{0.0f, 0.0f, z};
+
+      vertices.push_back({
+          .pos = glm::vec3{glm::cos(angle), glm::sin(angle), z},
+          .color = white,
+          .normal = glm::normalize(position - center),
+      });
+    }
+  }
+
+  // TODO: Refactor `unsigned int` to `uint32_t`
+  std::vector<uint32_t> indices;
+
+  // Insert indices
+  for (int i{0}; i < circularPoints; ++i) {
+    for (int j{0}; j < rings - 1; ++j) {
+      const int rowStride{rings};
+      // Connect last and first row
+      const int nextRow{(i + 1) % circularPoints};
+
+      const int topLeft{i * rowStride + j};
+      const int topRight{topLeft + 1};
+      const int bottomLeft{nextRow * rowStride + j};
+      const int bottomRight{bottomLeft + 1};
+
+      indices.push_back(topLeft);
+      indices.push_back(topRight);
+      indices.push_back(bottomLeft);
+
+      indices.push_back(topRight);
+      indices.push_back(bottomRight);
+      indices.push_back(bottomLeft);
+    }
+  }
+
+  const float halfUnits{units / 2.0f};
+  const int fontCapCenterIdx{static_cast<int>(vertices.size())};
+
+  // Insert front cap center vertex
+  const glm::vec3 frontCapNormal{0.0f, 0.0f, -1.0f};
+  vertices.push_back({
+      .pos = glm::vec3{0.0f, 0.0f, -halfUnits},
+      .color = white,
+      .normal = frontCapNormal,
+  });
+
+  const int backCapCenterIdx{static_cast<int>(vertices.size())};
+
+  // Insert back cap center vertex
+  const glm::vec3 backCapNormal{0.0f, 0.0f, 1.0f};
+  vertices.push_back({
+      .pos = glm::vec3{0.0f, 0.0f, halfUnits},
+      .color = white,
+      .normal = backCapNormal,
+  });
+
+  // Insert front ring vertices
+  const int frontRingStartIdx{static_cast<int>(vertices.size())};
+  for (int i{0}; i < circularPoints; ++i) {
+    const float angle{i * arc};
+    vertices.push_back({
+        .pos = glm::vec3{glm::cos(angle), glm::sin(angle), -halfUnits},
+        .color = white,
+        .normal = frontCapNormal,
+    });
+  }
+
+  // Insert back ring vertices
+  const int backRingStartIdx{static_cast<int>(vertices.size())};
+  for (int i{0}; i < circularPoints; ++i) {
+    const float angle{i * arc};
+    vertices.push_back({
+        .pos = glm::vec3{glm::cos(angle), glm::sin(angle), halfUnits},
+        .color = white,
+        .normal = backCapNormal,
+    });
+  }
+
+  // Insert front & back cap indices
+  for (int i{0}; i < circularPoints; ++i) {
+    const int nextRingIdx{(i + 1) % circularPoints};
+
+    indices.push_back(frontRingStartIdx + i);
+    indices.push_back(frontRingStartIdx + nextRingIdx);
+    indices.push_back(fontCapCenterIdx);
+
+    indices.push_back(backRingStartIdx + i);
+    indices.push_back(backRingStartIdx + nextRingIdx);
+    indices.push_back(backCapCenterIdx);
+  }
+
+  VertexLayout layout;
+  layout.push<float>(3);
+  layout.push<float>(3);
+  layout.push<float>(3);
+
+  return {vertices, indices, layout};
 }
 
 std::string loadShaderSource(const std::string &filePath) {
@@ -1241,6 +1361,14 @@ int main() {
   glm::mat4 lightSourceModelMatrix{glm::identity<glm::mat4>()};
   lightSourceModelMatrix =
       glm::translate(lightSourceModelMatrix, lightPosition);
+  /////////////////////////////////////////////////////////////////////////////
+
+  Mesh cylinder{generateCylinder(10, 32, 1.0f)};
+  glm::mat4 cylinderModelMatrix{glm::identity<glm::mat4>()};
+  cylinderModelMatrix =
+      glm::translate(cylinderModelMatrix, glm::vec3{10.0f, 5.0f, -10.0f});
+  cylinderModelMatrix =
+      glm::scale(cylinderModelMatrix, glm::vec3{1.0f, 1.0f, 4.0f});
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -1512,15 +1640,19 @@ int main() {
 
     depthProgram.setUniform("u_projection", lightMatrix.projection);
     depthProgram.setUniform("u_view", lightMatrix.view);
-    depthProgram.setUniform("u_model", modelMatrix);
 
+    depthProgram.setUniform("u_model", modelMatrix);
     cube.bind();
     glDrawElements(GL_TRIANGLES, cube.indicesCount(), cube.indexType(), 0);
 
     depthProgram.setUniform("u_model", sphereModelMatrix);
-
     sphere.bind();
     glDrawElements(GL_TRIANGLES, sphere.indicesCount(), sphere.indexType(), 0);
+
+    depthProgram.setUniform("u_model", cylinderModelMatrix);
+    cylinder.bind();
+    glDrawElements(GL_TRIANGLES, cylinder.indicesCount(), cylinder.indexType(),
+                   0);
 
     // Revert culling to normal one
     glCullFace(GL_BACK);
@@ -1557,6 +1689,11 @@ int main() {
     sphere.bind();
     glDrawElements(GL_TRIANGLES, sphere.indicesCount(), sphere.indexType(), 0);
 
+    shaderProgram.setUniform("u_model", cylinderModelMatrix);
+    cylinder.bind();
+    glDrawElements(GL_TRIANGLES, cylinder.indicesCount(), cylinder.indexType(),
+                   0);
+
     debugShaderProgram.use();
 
     debugShaderProgram.setUniform("u_projection", projectionMatrix);
@@ -1565,6 +1702,7 @@ int main() {
     // TODO: Figure out if we need to pass these uniforms to this shader
     // program: u_lightProjection, u_lightView, u_shadowMap
 
+    sphere.bind();
     glDrawElements(GL_TRIANGLES, sphere.indicesCount(), sphere.indexType(), 0);
 
     floorProgram.use();
