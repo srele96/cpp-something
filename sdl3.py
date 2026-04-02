@@ -6,6 +6,7 @@ import sys
 
 BASE_DIR = Path(__file__).resolve().parent
 
+
 def copyOnLinux(src_dir, dest_dir, pattern="libSDL3.so*"):
     src_path = Path(src_dir)
     dest_path = Path(dest_dir)
@@ -32,6 +33,7 @@ def copyOnLinux(src_dir, dest_dir, pattern="libSDL3.so*"):
             print(f"System error during copy of {file.name}: {e}")
             sys.exit()
 
+
 def main():
     sdl_src_path = BASE_DIR / "SDL3"
     build_path = sdl_src_path / "build"
@@ -50,7 +52,10 @@ def main():
     try:
         subprocess.run(generate_cmd, check=True)
     except subprocess.CalledProcessError as e:
-        print(f"Command failed with return code {e.returncode}. Fix the problem manually.")
+        print(
+            f"Command failed with return code {e.returncode}. "
+            "Fix the problem manually."
+        )
         sys.exit()
 
     build_cmd = [
@@ -64,13 +69,17 @@ def main():
     try:
         subprocess.run(build_cmd, check=True)
     except subprocess.CalledProcessError as e:
-        print(f"Command failed with return code {e.returncode}. Fix the problem manually.")
+        print(
+            f"Command failed with return code {e.returncode}. "
+            "Fix the problem manually."
+        )
         sys.exit()
 
     if sys.platform == "linux":
         copyOnLinux(build_path, BASE_DIR)
     else:
         print("Please add copy command for your system.")
+
 
 if __name__ == "__main__":
     main()
