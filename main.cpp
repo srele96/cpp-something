@@ -1252,13 +1252,6 @@ public:
     // The logic belows essentially implements exactly that for front
     // vector.
 
-    // NOTE: This direction computation removes the need for static world up
-    // vector, but introduces roll when mouse moves in circles across the
-    // screen. Be aware of this behavior.
-
-    // TODO: Use static UP world axis. Lock (-pi/2 < pitch < pi/2). Avoid
-    // roll effect.
-
     // NOTE: The camera is always orinted relative to static world up, right
     // and forward vectors. That way we use absolute yaw and pitch instead
     // of delta values.
