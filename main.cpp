@@ -1124,6 +1124,7 @@ struct CreateLightMatrixParam {
   glm::vec3 lightDirection;
 };
 
+// TODO: Split into two functions lightViewMatrix & lightProjectionMatrix
 LightMatrix createLightMatrix(const CreateLightMatrixParam &param) {
   const auto &projectionMatrix{param.projectionMatrix};
   const auto &viewMatrix{param.viewMatrix};
@@ -1161,9 +1162,14 @@ LightMatrix createLightMatrix(const CreateLightMatrixParam &param) {
   }
   center /= corners.size();
 
+  // TODO: (BUG) A far object outside this frustum, which blocks the light
+  // vector, will be excluded from shadow mapping computation, because it's not
+  // in the frustum. However we also can't make the frustum infinitely large
+  // because of the computation cost. There MUST be a better way.
+  //
   // Find the largest enclosing radius as light position distance
-  // Note: This is required to precisely illuminate visible area in the
-  // frustum.
+  //
+  // Note: This is required to precisely illuminate visible area in the frustum.
   float radius{0.0f};
   for (const auto &corner : corners) {
     radius = glm::max(radius, glm::length(corner - center));
