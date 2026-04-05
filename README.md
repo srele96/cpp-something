@@ -29,9 +29,13 @@ Run the following comand to build the SDL3 dynamic library and copy it to the ro
 python sdl3.py
 ```
 
+Compile on windows:
+
 ```txt
 g++ main.cpp glad/src/glad.c -std=c++20 -I sdl2/include -I glad/include -L sdl2/lib -lSDL3 -lopengl32 -o main.exe && ./main.exe
 ```
+
+Compile on linux:
 
 ```txt
 g++ main.cpp glad/src/glad.c \
