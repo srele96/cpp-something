@@ -1,5 +1,7 @@
 # cpp something
 
+The rendering project.
+
 ## Todo
 
 - Render light source
@@ -13,8 +15,13 @@
   - Forward+ (compute shaders required, the screen is split into 16x16 tiles grid)
   - Forward rendering (Simple)
   - Clustered shading (Frustum is split into 3d-like voxel clusters)
+- Create `vendor` folder for dependencies
 
 ## Docs
+
+The rendering project documentation.
+
+### Setup
 
 Run the following comand to build the SDL3 dynamic library and copy it to the root.
 

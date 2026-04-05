@@ -1,9 +1,15 @@
-*.dll
-*.exe
-main
+# Generated
 compile_commands.json
 build
 .cache
+.venv
 
+# Binaries
 *.so
 *.so.*
+*.dll
+*.exe
+main
+
+# Code editor
+*.sublime-workspace

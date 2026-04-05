@@ -1,0 +1,12 @@
+[project]
+name = "cpp-something"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "numpy>=2.4.4",
+    "plotly>=6.6.0",
+    "python-lsp-server[all]>=1.14.0",
+]
