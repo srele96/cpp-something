@@ -18,22 +18,29 @@
      misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 */
+#include "SDL_internal.h"
 
-/**
- *  \file SDL_revision.h
- *
- *  Header file containing the SDL revision.
- */
+#ifndef SDL_sysmain_main_hpp_
+#define SDL_sysmain_main_hpp_
 
-#ifndef SDL_revision_h_
-#define SDL_revision_h_
+#include <e32std.h>
 
-#cmakedefine SDL_VENDOR_INFO "@SDL_VENDOR_INFO@"
+class CSDLmain : public CActive
+{
+public:
+    static CSDLmain *NewL();
+    ~CSDLmain();
 
-#ifdef SDL_VENDOR_INFO
-#define SDL_REVISION "@SDL_REVISION@ (" SDL_VENDOR_INFO ")"
-#else
-#define SDL_REVISION "@SDL_REVISION@"
-#endif
+    void Start();
 
-#endif /* SDL_revision_h_ */
+protected:
+    void DoCancel() ;
+    void RunL();
+
+private:
+    CSDLmain();
+    void ConstructL();
+    SDL_AppResult iResult;
+};
+
+#endif // SDL_sysmain_main_hpp_

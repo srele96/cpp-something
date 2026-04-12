@@ -18,22 +18,32 @@
      misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 */
+#include "SDL_internal.h"
 
-/**
- *  \file SDL_revision.h
- *
- *  Header file containing the SDL revision.
- */
+#ifdef SDL_PLATFORM_WIN32
 
-#ifndef SDL_revision_h_
-#define SDL_revision_h_
+#include "../../core/windows/SDL_windows.h"
+#include "../SDL_main_callbacks.h"
 
-#cmakedefine SDL_VENDOR_INFO "@SDL_VENDOR_INFO@"
+/* Win32-specific SDL_RunApp(), which does most of the SDL_main work,
+  based on SDL_windows_main.c, placed in the public domain by Sam Lantinga  4/13/98 */
 
-#ifdef SDL_VENDOR_INFO
-#define SDL_REVISION "@SDL_REVISION@ (" SDL_VENDOR_INFO ")"
-#else
-#define SDL_REVISION "@SDL_REVISION@"
-#endif
+int MINGW32_FORCEALIGN SDL_RunApp(int argc, char *argv[], SDL_main_func mainFunction, void *reserved)
+{
+    (void)reserved;
 
-#endif /* SDL_revision_h_ */
+    int result = -1;
+    void *heap_allocated = NULL;
+    const char *args_error = WIN_CheckDefaultArgcArgv(&argc, &argv, &heap_allocated);
+    if (args_error) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Fatal Error", args_error, NULL);
+    } else {
+        result = SDL_CallMainFunction(argc, argv, mainFunction);
+        if (heap_allocated) {
+            HeapFree(GetProcessHeap(), 0, heap_allocated);
+        }
+    }
+    return result;
+}
+
+#endif // SDL_PLATFORM_WIN32

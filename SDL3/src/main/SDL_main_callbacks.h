@@ -19,21 +19,15 @@
   3. This notice may not be removed or altered from any source distribution.
 */
 
-/**
- *  \file SDL_revision.h
- *
- *  Header file containing the SDL revision.
- */
+#ifndef SDL_main_callbacks_h_
+#define SDL_main_callbacks_h_
 
-#ifndef SDL_revision_h_
-#define SDL_revision_h_
+bool SDL_HasMainCallbacks(void);
+SDL_AppResult SDL_InitMainCallbacks(int argc, char *argv[], SDL_AppInit_func appinit, SDL_AppIterate_func _appiter, SDL_AppEvent_func _appevent, SDL_AppQuit_func _appquit);
+SDL_AppResult SDL_IterateMainCallbacks(bool pump_events);
+void SDL_QuitMainCallbacks(SDL_AppResult result);
 
-#cmakedefine SDL_VENDOR_INFO "@SDL_VENDOR_INFO@"
+// Check args and call the main function
+extern int SDL_CallMainFunction(int argc, char *argv[], SDL_main_func mainFunction);
 
-#ifdef SDL_VENDOR_INFO
-#define SDL_REVISION "@SDL_REVISION@ (" SDL_VENDOR_INFO ")"
-#else
-#define SDL_REVISION "@SDL_REVISION@"
-#endif
-
-#endif /* SDL_revision_h_ */
+#endif // SDL_main_callbacks_h_

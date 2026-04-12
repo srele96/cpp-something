@@ -19,21 +19,32 @@
   3. This notice may not be removed or altered from any source distribution.
 */
 
-/**
- *  \file SDL_revision.h
- *
- *  Header file containing the SDL revision.
- */
+#include "SDL_internal.h"
 
-#ifndef SDL_revision_h_
-#define SDL_revision_h_
+#ifdef SDL_PLATFORM_3DS
 
-#cmakedefine SDL_VENDOR_INFO "@SDL_VENDOR_INFO@"
+#include "../SDL_main_callbacks.h"
 
-#ifdef SDL_VENDOR_INFO
-#define SDL_REVISION "@SDL_REVISION@ (" SDL_VENDOR_INFO ")"
-#else
-#define SDL_REVISION "@SDL_REVISION@"
+#include <3ds.h>
+
+int SDL_RunApp(int argc, char *argv[], SDL_main_func mainFunction, void * reserved)
+{
+    int result;
+
+    // init
+    osSetSpeedupEnable(true);
+    romfsInit();
+
+    result = SDL_CallMainFunction(argc, argv, mainFunction);
+
+    // quit
+    romfsExit();
+
+    return result;
+}
+
+#ifdef __cplusplus
+} // extern "C"
 #endif
 
-#endif /* SDL_revision_h_ */
+#endif

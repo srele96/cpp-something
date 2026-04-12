@@ -9,7 +9,7 @@ build
 *.so.*
 *.dll
 *.exe
-main
+/main
 
 # Code editor
 *.sublime-workspace

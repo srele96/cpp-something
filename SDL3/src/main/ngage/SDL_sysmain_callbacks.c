@@ -18,22 +18,14 @@
      misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 */
+#include "SDL_internal.h"
 
-/**
- *  \file SDL_revision.h
- *
- *  Header file containing the SDL revision.
- */
+#ifdef SDL_PLATFORM_NGAGE
 
-#ifndef SDL_revision_h_
-#define SDL_revision_h_
+int SDL_EnterAppMainCallbacks(int argc, char *argv[], SDL_AppInit_func appinit, SDL_AppIterate_func appiter, SDL_AppEvent_func appevent, SDL_AppQuit_func appquit)
+{
+    // Intentionally does nothing; Callbacks are called using the RunL() method.
+    return 0;
+}
 
-#cmakedefine SDL_VENDOR_INFO "@SDL_VENDOR_INFO@"
-
-#ifdef SDL_VENDOR_INFO
-#define SDL_REVISION "@SDL_REVISION@ (" SDL_VENDOR_INFO ")"
-#else
-#define SDL_REVISION "@SDL_REVISION@"
-#endif
-
-#endif /* SDL_revision_h_ */
+#endif // SDL_PLATFORM_NGAGE

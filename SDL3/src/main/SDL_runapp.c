@@ -18,22 +18,23 @@
      misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 */
+#include "SDL_internal.h"
+#include "SDL_main_callbacks.h"
 
-/**
- *  \file SDL_revision.h
- *
- *  Header file containing the SDL revision.
- */
+// Add your platform here if you define a custom SDL_RunApp() implementation
+#if !defined(SDL_PLATFORM_WIN32) && \
+    !defined(SDL_PLATFORM_GDK) && \
+    !defined(SDL_PLATFORM_IOS) && \
+    !defined(SDL_PLATFORM_TVOS) && \
+    !defined(SDL_PLATFORM_EMSCRIPTEN) && \
+    !defined(SDL_PLATFORM_PSP) && \
+    !defined(SDL_PLATFORM_PS2) && \
+    !defined(SDL_PLATFORM_3DS)
 
-#ifndef SDL_revision_h_
-#define SDL_revision_h_
+int SDL_RunApp(int argc, char *argv[], SDL_main_func mainFunction, void * reserved)
+{
+    (void)reserved;
+    return SDL_CallMainFunction(argc, argv, mainFunction);
+}
 
-#cmakedefine SDL_VENDOR_INFO "@SDL_VENDOR_INFO@"
-
-#ifdef SDL_VENDOR_INFO
-#define SDL_REVISION "@SDL_REVISION@ (" SDL_VENDOR_INFO ")"
-#else
-#define SDL_REVISION "@SDL_REVISION@"
 #endif
-
-#endif /* SDL_revision_h_ */
