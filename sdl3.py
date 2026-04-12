@@ -1,5 +1,4 @@
 import subprocess
-import os
 from pathlib import Path
 import shutil
 import sys
@@ -7,7 +6,7 @@ import sys
 BASE_DIR = Path(__file__).resolve().parent
 
 
-def copyOnLinux(src_dir, dest_dir, pattern="libSDL3.so*"):
+def glob_copy_artifacts(src_dir, dest_dir, pattern):
     src_path = Path(src_dir)
     dest_path = Path(dest_dir)
 
@@ -76,7 +75,9 @@ def main():
         sys.exit()
 
     if sys.platform == "linux":
-        copyOnLinux(build_path, BASE_DIR)
+        glob_copy_artifacts(build_path, BASE_DIR, "libSDL3.so*")
+    elif sys.platform == "win32":
+        glob_copy_artifacts(build_path, BASE_DIR, "SDL3.dll")
     else:
         print("Please add copy command for your system.")
 

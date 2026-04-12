@@ -32,7 +32,7 @@ python sdl3.py
 Compile on windows:
 
 ```txt
-g++ main.cpp glad/src/glad.c -std=c++20 -I sdl2/include -I glad/include -L sdl2/lib -lSDL3 -lopengl32 -o main.exe && ./main.exe
+g++ main.cpp glad/src/glad.c -std=c++20 -I glm -I SDL3/include -I glad/include -L SDL3/build -lSDL3 -lopengl32 -o main.exe && ./main.exe
 ```
 
 Compile on linux:
