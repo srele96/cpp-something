@@ -25,37 +25,55 @@ The rendering project documentation.
 
 Run the following comand to build the SDL3 dynamic library and copy it to the root.
 
-```txt
-python sdl3.py
+```bash
+uv run sdl3.py
 ```
 
 Compile on windows:
 
-```txt
+```powershell
 g++ main.cpp glad/src/glad.c -std=c++20 -I glm -I SDL3/include -I glad/include -L SDL3/build -lSDL3 -lopengl32 -o main.exe && ./main.exe
+```
+
+Generate compile command on windows:
+
+```powershell
+echo "g++ main.cpp glad/src/glad.c -std=c++20 -I glm -I SDL3/include -I glad/include -L SDL3/build -lSDL3 -lopengl32 -o main.exe" | uv run compiledb
 ```
 
 Compile on linux:
 
-```txt
+```bash
 g++ main.cpp glad/src/glad.c \
-    -std=c++20 \
-    -I glm \
-    -I SDL3/include -I glad/include \
-    -L SDL3/build -lSDL3 -lGL -ldl \
-    -Wl,-rpath,'$ORIGIN' \
-    -o main && ./main
+  -std=c++20 \
+  -I glm \
+  -I SDL3/include -I glad/include \
+  -L SDL3/build -lSDL3 -lGL -ldl \
+  -Wl,-rpath,'$ORIGIN' \
+  -o main && ./main
 ```
 
 Check if using local sdl3
 
-```txt
+```bash
 ldd ./main | grep SDL
 ```
 
-Generate compile commands on linux:
+_(Recommended)_: Generate compile commands on linux:
 
-```txt
+```bash
+echo 'g++ main.cpp glad/src/glad.c \
+  -std=c++20 \
+  -I glm \
+  -I SDL3/include -I glad/include \
+  -L SDL3/build -lSDL3 -lGL -ldl \
+  -Wl,-rpath,'\''$ORIGIN'\'' \
+  -o main' | uv run compiledb
+```
+
+_(If compiledb does not work)_: Or alternatively, use `bear`:
+
+```bash
 bear -- g++ main.cpp glad/src/glad.c \
     -std=c++20 \
     -I glm \
