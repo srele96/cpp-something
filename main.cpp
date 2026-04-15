@@ -7,6 +7,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -202,6 +203,8 @@ public:
   void unbind() const { glBindVertexArray(0); }
 };
 
+// TODO: Check potential memory alignment issue. The GPU is optimized for 16
+// byte alignment, check how to utilize vec4
 struct Vertex {
   glm::vec3 pos;
   glm::vec3 color;
@@ -1288,6 +1291,302 @@ public:
   }
 };
 
+class ClusteredShading {
+private:
+  struct Indexer {
+    size_t m_i;
+    size_t m_j;
+    size_t m_k;
+
+    size_t computeIndex(const size_t i, const size_t j, const size_t k) {
+      return i * m_j * m_k + j * m_k + k;
+    }
+  };
+
+public:
+  struct SegmentCount {
+    size_t width;
+    size_t height;
+    size_t depth;
+  };
+
+  struct Cluster {
+    glm::vec3 minBound;
+    glm::vec3 maxBound;
+  };
+
+  std::vector<Cluster> buildClusters(const glm::mat4 &projection,
+                                     const SegmentCount &segmentCount,
+                                     const float near, const float far) {
+    const glm::mat4 inverseProjection{glm::inverse(projection)};
+
+    const size_t widthSegments{segmentCount.width + 1};
+    const size_t heightSegments{segmentCount.height + 1};
+    const size_t depthSegments{segmentCount.depth + 1};
+
+    const size_t total_points{widthSegments * heightSegments * depthSegments};
+    std::vector<glm::vec3> points;
+    points.reserve(total_points);
+
+    for (size_t d{0}; d < depthSegments; ++d) {
+      // Note: Perform depth computation in the outer loop to avoid unnecesary
+      // recomputation.
+
+      // Logarithmic depth, closer clusters are smaller, further clusters
+      // are larger
+      const float t{static_cast<float>(d) /
+                    static_cast<float>(segmentCount.depth)};
+      const float zView{near * glm::pow(far / near, t)};
+
+      // The front is negative in view space, X and Y can be 0
+      const glm::vec4 aVecView{0.0f, 0.0f, -zView, 1.0f};
+      // Project to NDC
+      const glm::vec4 aVecNDC{projection * aVecView};
+      // Perspective divide
+      const glm::vec4 aVec{aVecNDC / aVecNDC.w};
+
+      // Account for small floating point precision errors
+      const float epsilon{0.0001f};
+      // Ensure perspective divide leaves us in expected state
+      assert(glm::abs(aVec.w - 1.0f) < epsilon &&
+             "Perspective divide failed or W was zero!");
+
+      // Build frustum points
+      for (size_t w{0}; w < widthSegments; ++w) {
+        float xNDC{static_cast<float>(w) /
+                   static_cast<float>(segmentCount.width)};
+        xNDC = 2.0f * xNDC - 1.0f;
+        for (size_t h{0}; h < heightSegments; ++h) {
+          float yNDC{static_cast<float>(h) /
+                     static_cast<float>(segmentCount.height)};
+          yNDC = 2.0f * yNDC - 1.0f;
+
+          // Create NDC vector
+          const glm::vec4 bVecNDC{xNDC, yNDC, aVec.z, 1.0f};
+          // Unproject to view space
+          const glm::vec4 bVecView{inverseProjection * bVecNDC};
+          // Perspective divide
+          const glm::vec4 bVec{bVecView / bVecView.w};
+
+          // Ensure perspective divide leaves us in expected state
+          assert(glm::abs(bVec.w - 1.0f) < epsilon &&
+                 "Perspective divide failed or W was zero!");
+
+          points.emplace_back(bVec.x, bVec.y, bVec.z);
+        }
+      }
+    }
+
+    Indexer indexer{
+        .m_i = depthSegments,
+        .m_j = widthSegments,
+        .m_k = heightSegments,
+    };
+
+    std::vector<Cluster> clusters;
+
+    // Build clusters
+    for (size_t d{0}; d < depthSegments - 1; ++d) {
+      for (size_t w{0}; w < widthSegments - 1; ++w) {
+        for (size_t h{0}; h < heightSegments - 1; ++h) {
+          const glm::vec3 &currentPoint{points[indexer.computeIndex(d, w, h)]};
+          // TODO(note): If a light misses the cluster by a tiny amount, add
+          // small padding, for example 0.01f. A flickering light could be an
+          // indicator.
+          glm::vec3 minVec{currentPoint};
+          glm::vec3 maxVec{currentPoint};
+
+          // Find min/max corners of the cluster
+          for (size_t i{d}; i <= d + 1; ++i) {
+            for (size_t j{w}; j <= w + 1; ++j) {
+              for (size_t k{h}; k <= h + 1; ++k) {
+                const glm::vec3 &point{points[indexer.computeIndex(i, j, k)]};
+                minVec = glm::min(minVec, point);
+                maxVec = glm::max(maxVec, point);
+              }
+            }
+          }
+
+          clusters.push_back({
+              .minBound = minVec,
+              .maxBound = maxVec,
+          });
+        }
+      }
+    }
+
+    return clusters;
+  }
+
+  void cullLights() {
+    // TODO
+  }
+
+  template <typename T, typename Parameter> struct StrongType {
+    T value;
+
+    StrongType() = default;
+
+    // Prevent accidental conversion
+    explicit constexpr StrongType(const T &v) : value(v) {}
+    explicit constexpr StrongType(T &&v) : value(std::move(v)) {}
+
+    constexpr T &get() { return value; }
+    constexpr const T &get() const { return value; }
+
+    constexpr T *operator->() { return &value; }
+    constexpr const T *operator->() const { return &value; }
+  };
+
+  struct Position : StrongType<glm::vec3, Position> {
+    using StrongType::StrongType;
+  };
+  struct Color : StrongType<glm::vec3, Color> {
+    using StrongType::StrongType;
+  };
+  struct Radius : StrongType<float, Radius> {
+    using StrongType::StrongType;
+  };
+  struct Intensity : StrongType<float, Intensity> {
+    using StrongType::StrongType;
+  };
+
+  /**
+   * Do NOT access member values directly!!! It is not type-safe and is
+   * error-prone!!!
+   **/
+  struct PointLightData {
+    // The GPU is optimized for 16 bit data
+    // Needs to be packed in vec4 for Texture Buffer Objects
+    glm::vec4 position_radius;
+    glm::vec4 color_intensity;
+  };
+
+  // --- Padding safety checks ---
+
+  // Compiler might insert padding to align missaligned data. Prevent developer
+  // from making a mistake of adding non-aligned data.
+  static_assert(sizeof(PointLightData) % sizeof(glm::vec4) == 0,
+                "FATAL: PointLightData alignment broken. Total size must be a "
+                "multiple of 16 bytes.");
+  // Lock in the size of the PointLightData to avoid accidental mistakes of
+  // adding 16 bytes of non vec4
+  static_assert(sizeof(PointLightData) == 32,
+                "FATAL: PointLightData size changed! Expected exactly 32 bytes "
+                "(two vec4s). "
+                "Only use glm::vec4 to prevent padding issues.");
+  static constexpr size_t EXPECTED_LIGHT_STRIDE{2};
+  // Ensure adding or removing a property triggers a failure, to remind a
+  // developer to check the padding of a struct
+  static_assert(
+      sizeof(PointLightData) == (EXPECTED_LIGHT_STRIDE * sizeof(glm::vec4)),
+      "FATAL: PointLightData size does not match EXPECTED_LIGHT_STRIDE. "
+      "If you added a vec4, you must increment the stride and update your "
+      "shader!");
+
+  struct PointLight {
+    static PointLightData create(Position position, Radius radius, Color color,
+                                 Intensity intensity) {
+      return PointLightData{
+          .position_radius = {glm::vec4{position.get(), radius.get()}},
+          .color_intensity = {glm::vec4{color.get(), intensity.get()}},
+      };
+    }
+
+    static Position getPosition(const PointLightData &source) {
+      const auto x{source.position_radius.x};
+      const auto y{source.position_radius.y};
+      const auto z{source.position_radius.z};
+      return Position{glm::vec3{x, y, z}};
+    }
+
+    static Radius getRadius(const PointLightData &source) {
+      const auto w{source.position_radius.w};
+      return Radius{w};
+    }
+
+    static Color getColor(const PointLightData &source) {
+      const auto x{source.color_intensity.x};
+      const auto y{source.color_intensity.y};
+      const auto z{source.color_intensity.z};
+      return Color{glm::vec3{x, y, z}};
+    }
+
+    static Intensity getIntensity(const PointLightData &source) {
+      const auto w{source.color_intensity.w};
+      return Intensity{w};
+    }
+
+    static void setPosition(PointLightData &destination, Position position) {
+      const auto x{position.get().x};
+      const auto y{position.get().y};
+      const auto z{position.get().z};
+      const auto w{destination.position_radius.w};
+      destination.position_radius = glm::vec4{x, y, z, w};
+    }
+
+    static void setRadius(PointLightData &destination, Radius radius) {
+      const auto x{destination.position_radius.x};
+      const auto y{destination.position_radius.y};
+      const auto z{destination.position_radius.z};
+      const auto w{radius.get()};
+      destination.position_radius = glm::vec4{x, y, z, w};
+    }
+
+    static void setColor(PointLightData &destination, Color color) {
+      const auto x{color.get().x};
+      const auto y{color.get().y};
+      const auto z{color.get().z};
+      const auto w{destination.color_intensity.w};
+      destination.color_intensity = glm::vec4{x, y, z, w};
+    }
+
+    static void setIntensity(PointLightData &destination, Intensity intensity) {
+      const auto x{destination.color_intensity.x};
+      const auto y{destination.color_intensity.y};
+      const auto z{destination.color_intensity.z};
+      const auto w{intensity.get()};
+      destination.color_intensity = glm::vec4{x, y, z, w};
+    }
+  };
+
+  static_assert(
+      std::is_standard_layout_v<PointLightData>,
+      "PointLightData must satisfy standard layout to be GPU compatible.");
+  static_assert(
+      std::is_trivially_copyable_v<PointLightData>,
+      "PointLightData must be trivially copyable to be GPU compatible.");
+
+  std::vector<PointLightData> m_pointLightPool;
+  std::vector<size_t> m_pointLightIndexList;
+  std::vector<glm::vec2> m_pointLightClusters;
+
+  // TODO: How to sync light data with the light model?
+  // TODO: Improve performance to O(1)
+  void addPointLight(PointLightData pointLight) {
+    m_pointLightPool.push_back(std::move(pointLight));
+  }
+  // TODO: Improve performance to O(1)
+  void removePointLight() {
+    //
+  }
+  // TODO: Improve performance to O(1)
+  void getPointLight() {
+    //
+  }
+
+  // TODO: Lights
+  // TODO: Light indices
+  // TODO: Offset and count
+
+  // - std::vector<glm::vec2> represents each corresponding cluster
+  // - an offset tells us where light indices start that hit this cluster
+  // - a count tells us how many indices hit the current cluster
+  //
+  //
+  // - light indices refer to each light in the vector of light data structs
+};
+
 // TODO: Generate distortion over a plane. This is where we can practically
 // apply calculus.
 
@@ -1592,6 +1891,22 @@ int main() {
 
   /////////////////////////////////////////////////////////////////////////////
 
+  const float fov{glm::radians(60.0f)};
+  const float aspectRatio{window_width / window_height};
+  const float near{0.1f};
+  const float far{100.0f};
+
+  ClusteredShading clusteredShading;
+
+  const auto clusters{
+      clusteredShading.buildClusters(                    //
+          glm::perspective(fov, aspectRatio, near, far), //
+          {.width = 16, .height = 16, .depth = 24},      //
+          near,                                          //
+          far                                            //
+          )                                              //
+  };
+
   bool running = true;
   SDL_Event event;
 
@@ -1683,11 +1998,6 @@ int main() {
     }
 
     glm::mat4 viewMatrix{camera.viewMatrix(worldUp)};
-
-    const float fov{glm::radians(60.0f)};
-    const float aspectRatio{window_width / window_height};
-    const float near{0.1f};
-    const float far{100.0f};
     glm::mat4 projectionMatrix{glm::perspective(fov, aspectRatio, near, far)};
 
     const glm::vec3 lightDirection{glm::normalize(

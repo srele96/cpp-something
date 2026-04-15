@@ -1,4 +1,4 @@
-# cpp something
+# The Rendering Project
 
 The rendering project.
 
@@ -16,6 +16,15 @@ The rendering project.
   - Forward rendering (Simple)
   - Clustered shading (Frustum is split into 3d-like voxel clusters)
 - Create `vendor` folder for dependencies
+- Light types
+  - Point Light (Omni-Directional)
+  - Spot Light (Conical)
+  - Area Light (Rectangle/Disk)
+  - Capsule / Line Light
+  - Ambient / Environment Probe
+- Spinning cube inside two spinning perpendicular toruses
+  - Make the cube glow
+  - Make interesting sides of a cube using SDF (Signed Distance Functions)
 
 ## Docs
 
