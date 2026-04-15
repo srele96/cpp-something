@@ -1288,6 +1288,50 @@ public:
   }
 };
 
+// TODO: Figuore out from AI what buffer types benefit from this set of
+// methods, getters, setters, etc
+class VBO {
+private:
+  GLuint m_id{0};
+
+public:
+  VBO() { genBuffer(); };
+  VBO(const VBO &other) = delete;
+  VBO(VBO &&other) { *this = std::move(other); }
+  ~VBO() {
+    if (m_id) {
+      glDeleteBuffers(1, &m_id);
+    }
+  }
+  VBO &operator=(const VBO &other) = delete;
+  VBO &operator=(VBO &&other) {
+    if (this != &other) {
+      if (m_id) {
+        glDeleteBuffers(1, &m_id);
+      }
+      m_id = std::exchange(other.m_id, 0);
+    }
+    return *this;
+  }
+  void bind() const { glBindBuffer(GL_ARRAY_BUFFER, m_id); }
+  void unbind() const { glBindBuffer(GL_ARRAY_BUFFER, 0); }
+  void genBuffer() {
+    if (m_id == 0) {
+      glGenBuffers(1, &m_id);
+    }
+  }
+
+  template <typename T> //
+  void data(const T *vertices, GLsizeiptr size,
+             GLenum usage = GL_STATIC_DRAW) {
+    glBufferData(GL_ARRAY_BUFFER, size, vertices, usage);
+  }
+
+  void subData() {
+    glBufferSubData();
+  }
+};
+
 // TODO: Generate distortion over a plane. This is where we can practically
 // apply calculus.
 
@@ -1582,6 +1626,88 @@ int main() {
   }
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  /////////////////////////////////////////////////////////////////////////////
+
+  struct Light {
+    glm::vec4 position_radius;
+    glm::vec4 color_intensity;
+  };
+  std::vector<Light> lights;
+  std::vector<uint32_t> lightsIndexes;
+  std::vector<glm::vec2> lightsClusters;
+
+  struct LightTexture {
+    GLuint lightsId;
+    GLuint lightsIndicesId;
+    GLuint lightsClustersId;
+  };
+
+  const LightTexture lightTexture{};
+
+  class Texture {
+  public:
+    //
+  };
+
+  enum class BufferType : GLenum {
+    TEXTURE = GL_TEXTURE_BUFFER,
+    VERTEX = GL_ARRAY_BUFFER,
+    ELEMENT = GL_ELEMENT_ARRAY_BUFFER,
+  };
+
+  class Buffer {
+  private:
+    GLuint id;
+
+  public:
+    //
+  };
+
+  {
+    GLuint bufferId;
+    glGenBuffers(1, &bufferId);
+    glBindBuffer(GL_TEXTURE_BUFFER, bufferId);
+    glBufferData(GL_TEXTURE_BUFFER, lights.size() * sizeof(Light),
+                 lights.data(), GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
+
+    GLuint textureId;
+    glGenTextures(1, &textureId);
+    glBindTexture(GL_TEXTURE_BUFFER, textureId);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, bufferId);
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+  }
+
+  {
+    GLuint bufferId;
+    glGenBuffers(1, &bufferId);
+    glBindBuffer(GL_TEXTURE_BUFFER, bufferId);
+    glBufferData(GL_TEXTURE_BUFFER, lightsIndexes.size() * sizeof(uint32_t),
+                 lightsIndexes.data(), GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
+
+    GLuint textureId;
+    glGenTextures(1, &textureId);
+    glBindTexture(GL_TEXTURE_BUFFER, textureId);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_R32UI, bufferId);
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+  }
+
+  {
+    GLuint bufferId;
+    glGenBuffers(1, &bufferId);
+    glBindBuffer(GL_TEXTURE_BUFFER, bufferId);
+    glBufferData(GL_TEXTURE_BUFFER, lightsClusters.size() * sizeof(glm::vec2),
+                 lightsClusters.data(), GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
+
+    GLuint textureId;
+    glGenTextures(1, &textureId);
+    glBindTexture(GL_TEXTURE_BUFFER, textureId);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_RG32F, bufferId);
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+  }
 
   /////////////////////////////////////////////////////////////////////////////
 
